@@ -35,14 +35,10 @@ SettingsToggle {
         }
 
         Component.onCompleted: {
-            try {
-                dbus.typedCall("getState", [], function (state) {
-                    if (serviceState !== state)
-                        serviceState = state
-                })
-            } catch (e) {
-                serviceState = 0
-            }
+            dbus.typedCall("GetState", [], function (state) {
+                if (serviceState !== state)
+                    serviceState = state
+            })
         }
     }
 
@@ -62,11 +58,9 @@ SettingsToggle {
     onToggled: {
         if (serviceState === 1) {
             startedFromToggle = true
-            try { dbus.Start() }
-            catch (e) { console.warn("TailWind: Start failed:", e) }
+            dbus.call("Start")
         } else if (serviceState === 2) {
-            try { dbus.Stop() }
-            catch (e) { console.warn("TailWind: Stop failed:", e) }
+            dbus.call("Stop")
         }
     }
 
