@@ -10,6 +10,6 @@ Name[de]=TailWind
 
 [X-Sailjail]
 Sandboxing=Disabled
-OrganizationName=de.poetaster
-ApplicationName=TailWind
-Permissions=
+#OrganizationName=de.poetaster
+#ApplicationName=TailWind
+#Permissions=

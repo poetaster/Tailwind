@@ -6,21 +6,21 @@ CoverBackground {
         id: label
         anchors.centerIn: parent
         text: {
-            if ( serviceState === 2 ) return qsTr("Recording\u2026")
-            if ( serviceState === 1 ) return qsTr("Ready \u2013 tap to record")
-            if ( serviceState > 2 ) return qsTr("Saving\u2026")
-            return qsTr("Connecting\u2026")
+            if ( serviceState === 2 ) return qsTr("Recording...")
+            if ( serviceState === 3 ) return qsTr("Saving...")
+            if ( serviceState === 1 ) return qsTr("Ready")
+            return qsTr("TailWind")
         }
     }
 
     CoverActionList {
         id: coverAction
-        enabled: serviceState > 0 && serviceState < 3
+        enabled: serviceState > 0 && serviceState < 4
 
         CoverAction {
-            iconSource: serviceState === 1
-                ? "image://theme/icon-cover-camera"
-                : "image://theme/icon-cover-cancel"
+            iconSource: (serviceState === 2 || serviceState === 3)
+                        ? "image://theme/icon-cover-cancel"
+                        : "image://theme/icon-cover-location"
             onTriggered: {
                 coverTriggered()
             }

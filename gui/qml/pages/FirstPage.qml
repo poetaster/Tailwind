@@ -1,19 +1,55 @@
 import QtQuick 2.6
 import Sailfish.Silica 1.0
 import Nemo.DBus 2.0
+import Nemo.Configuration 1.0
 import Nemo.Notifications 1.0
+import QtMultimedia 5.6
 
 Page {
     id: page
-    property bool startedFromToggle: false
+    property bool startedFromToggle:false
 
-    /* Poll the daemon while it is not yet reachable (state 0). */
+    MediaPlayer {
+        id: tickPlayer
+        source: Qt.resolvedUrl("../sounds/tick.wav")
+        autoPlay: false
+    }
     Timer {
-        id: pollState
+        id: repeatedGetState
         interval: 1000
         repeat: false
-        running: false
-        onTriggered: refreshState()
+        onTriggered: {
+            dbus.typedCall("GetState", [], function(initialState) {
+                serviceState = initialState
+            }, function() {
+                repeatedGetState.start()
+            })
+        }
+    }
+    Timer {
+        id: delayTimer
+        interval: 1000
+        repeat: false
+        running:false
+        onTriggered: {
+            trigger();
+        }
+        function trigger() {
+            if (serviceState == 1) {
+                dbus.call("Start")
+            }
+            delayTimer.stop();
+            tickTimer.stop();
+        }
+    }
+    Timer {
+        id: tickTimer
+        interval: 1000
+        repeat: true
+        running:false
+        onTriggered: {
+            tickPlayer.play()
+        }
     }
 
     DBusInterface {
@@ -22,47 +58,41 @@ Page {
         path: "/de/poetaster/tailwind"
         iface: "de.poetaster.tailwind"
         bus: DBus.SessionBus
+
         signalsEnabled: true
 
         function stateChanged(newState) {
-            if (serviceState !== newState)
-                serviceState = newState
-            if (pollState.running)
-                pollState.stop()
+            serviceState = newState
+            if (repeatedGetState.running) {
+                repeatedGetState.stop()
+            }
         }
 
         function recordingFinished(filename) {
-            lastFile = filename
             if (startedFromToggle) {
                 notification.body = filename
                 notification.publish()
                 startedFromToggle = false
             }
         }
-    }
 
-    function refreshState() {
-        try {
-            dbus.typedCall("getState", [], function (state) {
-                if (serviceState !== state)
-                    serviceState = state
-                if (serviceState === 0)
-                    pollState.start()
-            }, function (err) {
-                pollState.start()
-            })
-        } catch (e) {
-            pollState.start()
+        Component.onDestruction: {
+            //call("Quit")
+        }
+
+        Component.onCompleted: {
+            dbus.typedCall("GetState", [], function(initialState) {
+                serviceState = initialState
+            });
         }
     }
 
-    function applyOptions() {
-        try {
-            dbus.setFps(Math.round(fpsSlider.value))
-            dbus.setBitrate(Math.round(bitrateSlider.value) * 1000000)
-        } catch (e) {
-            console.warn("TailWind: failed to push options:", e)
-        }
+    ConfigurationGroup {
+        id: conf
+        path: "/de/poetaster/tailwind"
+        property int fps: 24
+        property int bitrate: 24
+        property int startdelay: 0
     }
 
     SilicaFlickable {
@@ -77,23 +107,32 @@ Page {
             PageHeader {
                 title: qsTr("TailWind")
             }
-
-            TextSwitch {
-                text: qsTr("Capture the screen in H.264 (hardware) to MPEG-TS under your Videos folder.")
-                font.pointSize: Theme.fontSizeSmall
-                wrapMode: Text.Wrap
+            Slider {
+                id: startDelaySlider
+                width: parent.width
+                minimumValue: 0
+                maximumValue: 10
+                stepSize: 1
+                value: conf.startdelay
+                label: qsTr("Start delay")
+                valueText: qsTr("%1 s").arg(value)
+                onReleased: {
+                    delayTimer.interval = value * 1000
+                    conf.startdelay = value
+                }
             }
-
             Slider {
                 id: fpsSlider
                 width: parent.width
                 minimumValue: 1
-                maximumValue: 30
+                maximumValue: 24
                 stepSize: 1
-                value: 24
+                value: conf.fps
                 label: qsTr("Frames per second")
                 valueText: qsTr("%1 fps").arg(value)
-                onReleased: applyOptions()
+                onReleased: {
+                    conf.fps = value
+                }
             }
 
             Slider {
@@ -102,10 +141,12 @@ Page {
                 minimumValue: 2
                 maximumValue: 30
                 stepSize: 1
-                value: 24
+                value: conf.bitrate
                 label: qsTr("Bitrate")
-                valueText: qsTr("%1 Mbps").arg(value)
-                onReleased: applyOptions()
+                valueText: qsTr("%1 Mbit/s").arg(value)
+                onReleased: {
+                    conf.bitrate = value
+                }
             }
 
             Button {
@@ -113,25 +154,30 @@ Page {
                 anchors.horizontalCenter: parent.horizontalCenter
                 text: {
                     switch (serviceState) {
-                    case 0: return qsTr("Loading")
-                    case 1: return qsTr("Record")
-                    case 2: return qsTr("Stop")
-                    case 3: return qsTr("Saving, please wait")
-                    default: return qsTr("...")
+                    case 0:
+                        return qsTr("Loading")
+                    case 1:
+                        return qsTr("Record")
+                    case 2:
+                        return qsTr("Stop")
+                    case 3:
+                        return qsTr("Saving, please wait")
                     }
                 }
-                enabled: serviceState === 1 || serviceState === 2
+                enabled: serviceState > 0 && serviceState < 3
                 onClicked: {
-                    if (serviceState === 1) {
+                    trigger()
+                }
+                function trigger() {
+                    if (serviceState == 1) {
                         startedFromToggle = true
-                        applyOptions()
-                        try { dbus.Start() }
-                        catch (e) { console.warn("TailWind: Start failed:", e) }
-                    } else if (serviceState === 2) {
-                        try { dbus.Stop() }
-                        catch (e) { console.warn("TailWind: Stop failed:", e) }
+                        delayTimer.running = true
+                        tickTimer.running = true
+                    } else if (serviceState == 2) {
+                        dbus.call("Stop")
                     }
                 }
+
             }
 
             Label {
@@ -140,15 +186,8 @@ Page {
                 anchors.right: parent.right
                 anchors.margins: Theme.horizontalPageMargin
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                text: {
-                    if (serviceState === 2) return qsTr("Recording in progress\u2026")
-                    if (lastFile) return qsTr("Saved: %1").arg(lastFile)
-                    return ""
-                }
-                visible: text !== ""
+                visible: text
             }
-
-            property string lastFile: ""
         }
 
         VerticalScrollDecorator {}
@@ -157,13 +196,21 @@ Page {
     Connections {
         target: appWindow
         onCoverTriggered: {
-            if (actionButton.enabled)
-                actionButton.clicked()
+            console.log("cover")
+            if (actionButton.enabled) {
+                actionButton.trigger()
+            }
         }
     }
-
-    Component.onCompleted: refreshState()
-
+    Component.onCompleted: {
+        dbus.typedCall("GetState", [], function(initialState) {
+            serviceState = initialState
+            delayTimer.interval = conf.startdelay * 1000
+        });
+        if (serviceState == 0) {
+            repeatedGetState.start()
+        }
+    }
     Notification {
         id: notification
         icon: "image://theme/icon-m-camera"
@@ -172,6 +219,7 @@ Page {
         category: "x-nemo.general.warning"
         previewBody: body
         previewSummary: summary
-        summary: qsTr("Recording saved")
+        summary: "Recording completed"
     }
+
 }

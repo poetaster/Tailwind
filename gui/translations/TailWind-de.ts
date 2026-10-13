@@ -4,19 +4,19 @@
 <context>
     <name>CoverPage</name>
     <message>
-        <source>Recording…</source>
+        <source>Recording...</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Ready – tap to record</source>
+        <source>Saving...</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Saving…</source>
+        <source>Ready</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Connecting…</source>
+        <source>TailWind</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -24,10 +24,6 @@
     <name>FirstPage</name>
     <message>
         <source>TailWind</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>Capture the screen in H.264 (hardware) to MPEG-TS under your Videos folder.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -40,10 +36,6 @@
     </message>
     <message>
         <source>Bitrate</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>%1 Mbps</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -63,19 +55,15 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>...</source>
+        <source>Start delay</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Recording in progress…</source>
+        <source>%1 s</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Saved: %1</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>Recording saved</source>
+        <source>%1 Mbit/s</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
