@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+X-Nemo-Application-Type=silica-qt5
+Icon=TailWind
+Exec=TailWind
+Name=TailWind
+# translation example:
+# your app name in German locale (de)
+Name[de]=TailWind
+
+[X-Sailjail]
+Sandboxing=Disabled
+OrganizationName=de.poetaster
+ApplicationName=TailWind
+Permissions=

@@ -1,18 +1,15 @@
-# Rename this file as TailWind.changes to include changelog
-# entries in your RPM file.
-#
 # Add new changelog entries following the format below.
 # Add newest entries to the top of the list.
-# Separate entries from eachother with a blank line.
-#
-# Alternatively, if your changelog is automatically generated (e.g. with
-# the git-change-log command provided with Sailfish OS SDK), create a
-# TailWind.changes.run script to let mb2 run the required commands for you.
+# Separate entries from each other with a blank line.
 
-# * date Author's Name <author's email> version-release
-# - Summary of changes
+* Tue Oct 13 2026 Mark Washeim <mark@poetaster.de> 0.1.0-1
+- Restructure into recorder/ (daemon) + gui/ + settings/ subapps
+- Split the C droidrec pipeline into a reusable start/stop library
+- Expose the daemon over D-Bus (de.poetaster.tailwind) on the session bus
+- GUI: fps/bitrate sliders, record/stop, finish notification
+- Settings toggle for the top menu
+- Ship the systemd user service and D-Bus policy/activation
 
 * Sun Apr 13 2014 Jack Tar <jack.tar@example.com> 0.0.1-1
 - Scrubbed the deck
 - Hoisted the sails
-

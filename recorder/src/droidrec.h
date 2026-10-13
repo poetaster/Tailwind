@@ -33,6 +33,13 @@
 extern "C" {
 #endif
 
+/* Recorder state as observed by the Qt / D-Bus layer. */
+enum {
+    DROIDREC_STATE_IDLE = 0,
+    DROIDREC_STATE_READY,
+    DROIDREC_STATE_RECORDING
+};
+
 typedef struct CaptureBuffer {
     struct wl_buffer *wl_buffer;
     uint8_t *data;
@@ -93,7 +100,7 @@ typedef struct App {
     int height;
     int stride;
     int target_fps;
-    int seconds;
+    int seconds;   /* 0 = record until droidrec_stop() is called */
     int bitrate;
     const char *out_path;
 
@@ -101,6 +108,8 @@ typedef struct App {
     int failed;
     int worker_started;
     pthread_t worker_thread;
+    int event_started;
+    pthread_t event_thread;
     CaptureQueue queue;
     EncoderState enc;
     CaptureBuffer buffers[CAPTURE_BUFFER_COUNT];
@@ -127,6 +136,37 @@ typedef struct App {
     double last_progress;
 } App;
 
+/* Options accepted by droidrec_start(). Any field set to 0 (or NULL for
+ * out_path) falls back to a sensible default. */
+typedef struct DroidRecOptions {
+    const char *out_path;  /* destination file, e.g. MPEG-TS under the Videos dir */
+    int target_fps;        /* 0 = 24 */
+    int bitrate;           /* 0 = DEFAULT_BITRATE */
+    int seconds;           /* 0 = record until droidrec_stop() */
+    int width;             /* 0 = use current wl_output mode */
+    int height;            /* 0 = use current wl_output mode */
+} DroidRecOptions;
+
+/* --- record_stream API --------------------------------------------------
+ *
+ * droidrec is a reusable capture/encode backend, not a run-and-exit program.
+ * Typical usage from the Qt layer:
+ *
+ *   droidrec_start(&opts);   // begin a recording
+ *   ...                      // user hits "stop"
+ *   droidrec_stop();         // drain encoder, finalize file, return 0 on OK
+ *
+ * The Wayland connection, recorder global and capture buffers are created
+ * once on the first start() and persist across start/stop cycles.
+ * ----------------------------------------------------------------------- */
+int          droidrec_prepare(void);
+int          droidrec_start(const DroidRecOptions *opts);
+int          droidrec_stop(void);
+void         droidrec_shutdown(void);
+int          droidrec_is_recording(void);
+int          droidrec_state(void);
+const char  *droidrec_last_error(void);
+
 /* Time helpers */
 double now_seconds(void);
 int64_t now_monotonic_us(void);
@@ -141,7 +181,6 @@ int encoder_start(App *app);
 void encoder_stop(App *app);
 
 /* App lifecycle */
-int parse_int(int argc, char **argv, int idx, int def, int min, int max);
 void stop_worker(App *app);
 void print_result(App *app);
 void cleanup(App *app);

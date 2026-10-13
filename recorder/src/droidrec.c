@@ -16,6 +16,126 @@
 
 #include "droidrec.h"
 
+/* Singleton instance, created once on the first droidrec_start() and
+ * persisted across start/stop cycles. */
+static App *s_app = NULL;
+static const char *s_last_error = "ok";
+
+static void set_error(const char *msg) {
+    s_last_error = msg ? msg : "unknown error";
+}
+
+static void reset_recording_counters(App *app) {
+    app->failed = 0;
+    app->worker_started = 0;
+    app->event_started = 0;
+    app->frames_captured = 0;
+    app->frames_sent_encoder = 0;
+    app->frames_dropped_queue = 0;
+    app->frames_dropped_no_buffer = 0;
+    app->frames_converted = 0;
+    app->cancelled = 0;
+    app->in_flight = 0;
+    app->seq_next = 0;
+    app->last_lipstick_time = 0;
+    app->first_lipstick_time = 0;
+    app->have_first_lipstick_time = 0;
+    app->first_capture_monotonic_us = 0;
+    app->min_delta = 0;
+    app->max_delta = 0;
+    app->sum_delta = 0;
+    app->delta_count = 0;
+    app->last_progress = -1.0;
+
+    pthread_mutex_lock(&app->queue.mutex);
+    app->queue.head = 0;
+    app->queue.tail = 0;
+    app->queue.count = 0;
+    app->queue.stop = 0;
+    for (int n = 0; n < CAPTURE_QUEUE_CAP; n++) app->queue.items[n] = NULL;
+    pthread_mutex_unlock(&app->queue.mutex);
+
+    for (int i = 0; i < CAPTURE_BUFFER_COUNT; i++) {
+        app->buffers[i].state = 0;
+    }
+}
+
+static int init_display(App *app) {
+    app->display = wl_display_connect(NULL);
+    if (!app->display) {
+        fprintf(stderr, "droidrec: wl_display_connect failed\n");
+        return 0;
+    }
+
+    app->registry = wl_display_get_registry(app->display);
+    wl_registry_add_listener(app->registry, &registry_listener, app);
+    wl_display_roundtrip(app->display);
+    wl_display_roundtrip(app->display);
+
+    if (!app->shm || !app->output || !app->manager) {
+        fprintf(stderr, "droidrec: missing required Wayland globals\n");
+        return 0;
+    }
+
+    app->recorder = lipstick_recorder_manager_create_recorder(app->manager, app->output);
+    if (!app->recorder) {
+        fprintf(stderr, "droidrec: create_recorder failed\n");
+        return 0;
+    }
+    lipstick_recorder_add_listener(app->recorder, &recorder_listener, app);
+    wl_display_roundtrip(app->display);
+
+    pthread_mutex_init(&app->queue.mutex, NULL);
+    pthread_cond_init(&app->queue.cond, NULL);
+
+    for (int i = 0; i < CAPTURE_BUFFER_COUNT; i++) {
+        if (!create_capture_buffer(app, &app->buffers[i])) {
+            fprintf(stderr, "droidrec: create_capture_buffer %d failed\n", i);
+            return 0;
+        }
+    }
+
+    printf("droidrec: ready width=%d height=%d stride=%d\n", app->width, app->height, app->stride);
+    fflush(stdout);
+    return 1;
+}
+
+static void *event_loop_thread(void *arg) {
+    App *app = (App *)arg;
+    int fd = wl_display_get_fd(app->display);
+    double next_tick = app->start_seconds;
+    double period = app->target_fps > 0 ? 1.0 / (double)app->target_fps : (1.0 / 24.0);
+
+    while (app->running) {
+        double now = now_seconds();
+        if (now >= next_tick) {
+            lipstick_recorder_repaint(app->recorder);
+            request_one(app);
+            next_tick += period;
+            if (now - next_tick > 1.0) next_tick = now;
+        }
+        wl_display_dispatch_pending(app->display);
+        wl_display_flush(app->display);
+
+        struct pollfd pfd;
+        pfd.fd = fd;
+        pfd.events = POLLIN;
+        pfd.revents = 0;
+        int prc = poll(&pfd, 1, 5);
+        if (prc > 0 && (pfd.revents & POLLIN)) {
+            if (wl_display_dispatch(app->display) == -1) {
+                perror("droidrec: wl_display_dispatch");
+                break;
+            }
+        }
+
+        if (app->seconds > 0 && now_seconds() - app->start_seconds >= (double)app->seconds) {
+            app->running = 0;
+        }
+    }
+    return NULL;
+}
+
 double now_seconds(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -736,7 +856,7 @@ static void recorder_frame(void *data, struct lipstick_recorder *recorder, struc
         app->last_progress = elapsed;
     }
 
-    if (elapsed >= app->seconds) { app->running = 0; return; }
+    if (app->seconds > 0 && elapsed >= (double)app->seconds) { app->running = 0; return; }
     request_one(app);
 }
 
@@ -837,15 +957,10 @@ void cleanup(App *app) {
     pthread_mutex_destroy(&app->queue.mutex);
     pthread_cond_destroy(&app->queue.cond);
     pthread_mutex_destroy(&app->enc.mutex);
+    free((void *)app->out_path);
+    app->out_path = NULL;
 }
 
-int parse_int(int argc, char **argv, int idx, int def, int min, int max) {
-    if (argc <= idx) return def;
-    int v = atoi(argv[idx]);
-    if (v < min) return min;
-    if (v > max) return max;
-    return v;
-}
 
 void print_result(App *app) {
     double elapsed = now_seconds() - app->start_seconds;
@@ -883,4 +998,184 @@ void print_result(App *app) {
         printf("RESULT_LIPSTICK_DELTA_MS avg=%.2f min=%u max=%u samples=%llu\n", avg_delta, app->min_delta, app->max_delta, (unsigned long long)app->delta_count);
     }
     printf("RESULT_OK %d\n", (bytes > 0 && packets > 0 && errs == 0 && !app->failed) ? 1 : 0);
+}
+
+/* ==========================================================================
+ * record_stream public API
+ *
+ * droidrec is a reusable backend: it starts a recording on demand and stops
+ * it on request, instead of running for a fixed time and exiting. The Wayland
+ * connection, recorder global and shared-memory capture buffers are created
+ * once (on the first start) and kept for the lifetime of the process so that
+ * multiple recordings can be taken without re-connecting.
+ * ========================================================================== */
+
+int droidrec_prepare(void)
+{
+    /* Bring the backend up once (display, recorder global, capture buffers).
+     * Lets the Qt layer report "Ready" before the first recording. */
+    if (s_app) return 0;
+
+    s_app = (App *)calloc(1, sizeof(App));
+    if (!s_app) {
+        set_error("droidrec_prepare: out of memory");
+        return -1;
+    }
+    if (!init_display(s_app)) {
+        set_error("droidrec_prepare: display/recorder setup failed");
+        free(s_app);
+        s_app = NULL;
+        return -1;
+    }
+    set_error("ok");
+    printf("droidrec: prepared\n");
+    fflush(stdout);
+    return 0;
+}
+
+int droidrec_start(const DroidRecOptions *opts)
+{
+    if (!opts) {
+        set_error("droidrec_start: no options");
+        return -1;
+    }
+
+    if (s_app && s_app->running) {
+        set_error("droidrec_start: already recording");
+        return -1;
+    }
+
+    if (!s_app) {
+        s_app = (App *)calloc(1, sizeof(App));
+        if (!s_app) {
+            set_error("droidrec_start: out of memory");
+            return -1;
+        }
+
+        if (!init_display(s_app)) {
+            set_error("droidrec_start: display/recorder setup failed");
+            free(s_app);
+            s_app = NULL;
+            return -1;
+        }
+    }
+
+    App *app = s_app;
+
+    /* Apply per-recording options (defaults for anything unset). The output
+     * path is copied: callers (e.g. the Qt layer) may pass a temporary string.
+     * Ownership of the buffer lives here and is released in cleanup(). */
+    {
+        const char *want = opts->out_path ? opts->out_path : "/home/defaultuser/Videos/tailwind.ts";
+        char *dup = strdup(want);
+        if (dup) {
+            free((void *)app->out_path);
+            app->out_path = dup;
+        } else {
+            app->out_path = want; /* strdup failed (OOM); keep the pointer */
+        }
+    }
+    app->target_fps = opts->target_fps > 0 ? opts->target_fps : 24;
+    app->bitrate    = opts->bitrate > 0 ? opts->bitrate : DEFAULT_BITRATE;
+    app->seconds    = opts->seconds;  /* 0 = record until droidrec_stop() */
+    if (opts->width > 0 && opts->height > 0) {
+        app->width  = opts->width;
+        app->height = opts->height;
+        app->stride = app->width * 4;
+    }
+
+    printf("ARGS out=%s seconds=%d target_fps=%d bitrate=%d\n",
+           app->out_path, app->seconds, app->target_fps, app->bitrate);
+
+    reset_recording_counters(app);
+    memset(&app->enc, 0, sizeof(app->enc));
+
+    app->start_seconds = now_seconds();
+
+    if (!encoder_start(app)) {
+        set_error("droidrec_start: encoder_start failed");
+        return -1;
+    }
+
+    if (pthread_create(&app->worker_thread, NULL, worker_thread, app) != 0) {
+        encoder_stop(app);
+        set_error("droidrec_start: worker thread failed");
+        return -1;
+    }
+    app->worker_started = 1;
+
+    app->running = 1;
+    if (pthread_create(&app->event_thread, NULL, event_loop_thread, app) != 0) {
+        app->running = 0;
+        stop_worker(app);
+        encoder_stop(app);
+        set_error("droidrec_start: event loop thread failed");
+        return -1;
+    }
+    app->event_started = 1;
+
+    set_error("ok");
+    printf("droidrec: recording started\n");
+    fflush(stdout);
+    return 0;
+}
+
+int droidrec_stop(void)
+{
+    if (!s_app) {
+        set_error("droidrec_stop: no recorder instance");
+        return -1;
+    }
+
+    App *app = s_app;
+    if (!app->running) {
+        set_error("droidrec_stop: not recording");
+        return -1;
+    }
+
+    app->running = 0;
+
+    if (app->event_started) {
+        pthread_join(app->event_thread, NULL);
+        app->event_started = 0;
+    }
+
+    stop_worker(app);
+
+    int had_output = (app->enc.encoded_bytes > 0 || app->enc.encoded_packets > 0);
+
+    /* Drain the encoder, write the trailer and release the codec/muxer. */
+    encoder_stop(app);
+
+    print_result(app);
+    fflush(stdout);
+
+    set_error(had_output ? "ok" : "droidrec_stop: no frames were captured");
+    return had_output ? 0 : -1;
+}
+
+void droidrec_shutdown(void)
+{
+    if (!s_app) return;
+    if (s_app->running) droidrec_stop();
+    cleanup(s_app);
+    free(s_app);
+    s_app = NULL;
+}
+
+int droidrec_is_recording(void)
+{
+    return (s_app && s_app->running) ? 1 : 0;
+}
+
+int droidrec_state(void)
+{
+    if (!s_app) return DROIDREC_STATE_IDLE;
+    if (s_app->running) return DROIDREC_STATE_RECORDING;
+    return DROIDREC_STATE_READY;
+}
+
+const char *droidrec_last_error(void)
+{
+    return s_last_error;
 }
