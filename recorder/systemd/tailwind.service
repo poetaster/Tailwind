@@ -1,0 +1,13 @@
+[Unit]
+Description=TailWind screen recorder daemon
+After=lipstick.service
+Requires=lipstick.service
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/tailwind --daemon
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+{
+    "translation_catalog": "settings-system",
+    "entries": [
+        {
+            "path": "system_settings/look_and_feel/topmenu/actions/toggle_tailwind",
+            "title": "TailWind",
+            "type": "custom",
+            "icon": "image://theme/icon-m-camera",
+            "params": {
+                "source": "/usr/share/jolla-settings/pages/tailwind/TailWindToggle.qml",
+                "type": "grid"
+            }
+        }
+    ]
+}
