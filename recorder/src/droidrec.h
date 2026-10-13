@@ -106,6 +106,7 @@ typedef struct App {
 
     int running;
     int failed;
+    int droid_inited;  /* droid_media_init() called, deinit only on shutdown */
     int worker_started;
     pthread_t worker_thread;
     int event_started;

@@ -478,15 +478,22 @@ static DroidMediaCodec *create_encoder(App *app, int *chosen_format) {
 }
 
 int encoder_start(App *app) {
-    if (!droid_media_init()) {
-        printf("RESULT_DROID_INIT 0\n");
-        return 0;
+    /* droidmedia must stay initialized for the whole daemon lifetime:
+     * init/deinit per recording does not survive in a long-lived process.
+     * Deinit happens only in cleanup() (daemon shutdown). */
+    if (!app->droid_inited) {
+        if (!droid_media_init()) {
+            set_error("encoder_start: droid_media_init failed");
+            printf("RESULT_DROID_INIT 0\n");
+            return 0;
+        }
+        app->droid_inited = 1;
     }
     printf("RESULT_DROID_INIT 1\n");
 
     pthread_mutex_init(&app->enc.mutex, NULL);
     app->enc.codec = create_encoder(app, &app->enc.chosen_format);
-    if (!app->enc.codec) return 0;
+    if (!app->enc.codec) { set_error("encoder_start: no usable encoder format"); return 0; }
     printf("RESULT_ENCODER_STARTED 1\n");
     printf("RESULT_CHOSEN_FORMAT %d\n", app->enc.chosen_format);
 
@@ -510,6 +517,7 @@ int encoder_start(App *app) {
             "ERROR mux context result=%d\n",
             mux_result
         );
+        set_error("encoder_start: mux context alloc failed");
         return 0;
     }
 
@@ -562,6 +570,7 @@ int encoder_start(App *app) {
             avformat_free_context(app->enc.mux);
             app->enc.mux = NULL;
             app->enc.stream = NULL;
+            set_error("encoder_start: mux file open failed");
             return 0;
         }
     }
@@ -585,6 +594,7 @@ int encoder_start(App *app) {
         avformat_free_context(app->enc.mux);
         app->enc.mux = NULL;
         app->enc.stream = NULL;
+        set_error("encoder_start: mux header write failed");
         return 0;
     }
 
@@ -594,6 +604,7 @@ int encoder_start(App *app) {
     app->enc.loop_running = 1;
     if (pthread_create(&app->enc.loop_thread, NULL, codec_loop_thread, &app->enc) != 0) {
         perror("pthread_create codec loop");
+        set_error("encoder_start: codec loop thread failed");
         return 0;
     }
     for (int wait = 0; wait < 100 && !app->enc.loop_started; wait++) usleep(10000);
@@ -654,7 +665,9 @@ void encoder_stop(App *app) {
         droid_media_codec_destroy(app->enc.codec);
         app->enc.codec = NULL;
     }
-    droid_media_deinit();
+    /* NOTE: droid_media_deinit() intentionally NOT called here.
+     * The daemon re-uses droidmedia for the next recording; it is
+     * deinitialized in cleanup() when the daemon shuts down. */
 }
 
 static inline uint8_t clamp_u8(int v) {
@@ -957,6 +970,7 @@ void cleanup(App *app) {
     pthread_mutex_destroy(&app->queue.mutex);
     pthread_cond_destroy(&app->queue.cond);
     pthread_mutex_destroy(&app->enc.mutex);
+    if (app->droid_inited) droid_media_deinit();
     free((void *)app->out_path);
     app->out_path = NULL;
 }
@@ -1093,7 +1107,7 @@ int droidrec_start(const DroidRecOptions *opts)
     app->start_seconds = now_seconds();
 
     if (!encoder_start(app)) {
-        set_error("droidrec_start: encoder_start failed");
+        /* encoder_start() sets a specific error string; keep it. */
         return -1;
     }
 

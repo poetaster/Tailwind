@@ -74,7 +74,7 @@ void Recorder::setStatus(Status status)
         m_status = status;
     }
     qCDebug(logrecorder) << Q_FUNC_INFO << status;
-    emit statusChanged(status);
+    emit statusChanged((int)status);
 }
 
 Recorder::Options Recorder::options() const

@@ -56,7 +56,11 @@ public:
     static Options readOptions();
 
 signals:
-    void statusChanged(Status status);
+    /* NOTE: int, not Status. This signal is emitted from a worker thread
+     * (droidrec runs off the event loop), so the connection is queued.
+     * Qt 5.6 cannot queue unregistered enum types and drops the signal
+     * silently; int is a built-in meta type and always works. */
+    void statusChanged(int status);
     void recordingFinished(const QString &fileName);
 
 public slots:

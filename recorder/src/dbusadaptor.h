@@ -27,6 +27,7 @@ public slots:
     Q_NOREPLY void Stop();
 
     int GetState() const;
+    QString GetLastError() const;
 
     QString GetDestination() const;
     void SetDestination(const QString &destination);

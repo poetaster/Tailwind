@@ -1,5 +1,7 @@
 #include "dbusadaptor.h"
 
+#include "droidrec.h"
+
 #include <QCoreApplication>
 #include <QDebug>
 #include <QDBusConnection>
@@ -32,6 +34,11 @@ DBusAdaptor::~DBusAdaptor()
 int DBusAdaptor::GetState() const
 {
     return Recorder::instance() ? Recorder::instance()->status() : Recorder::StatusIdle;
+}
+
+QString DBusAdaptor::GetLastError() const
+{
+    return QString::fromUtf8(droidrec_last_error());
 }
 
 QString DBusAdaptor::GetDestination() const
