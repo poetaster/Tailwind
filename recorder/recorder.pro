@@ -29,9 +29,6 @@ HEADERS += \
     src/droidrec.h \
     src/wayland-lipstick-recorder-client-protocol.h
 
-# External libraries required by the recorder pipeline (same set as the
-# original single-binary TailWind build). droidmedia pulls in the mlite
-# HW codec backend at runtime on the device.
 LIBS += -lwayland-client -ldroidmedia -ldl -lavformat -lavcodec -lavutil -lpthread
 
 # D-Bus service activation (session bus) + system.d policy

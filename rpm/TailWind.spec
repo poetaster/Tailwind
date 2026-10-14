@@ -39,6 +39,23 @@ BuildRequires:  sailfish-svg2png
 TailWind is a SailfishOS screen recorder with a top-menu toggle,
 app for settings and recording on a timer. Videos is hardware compressed.
 
+%if "%{?vendor}" == "chum"
+PackageName: Tailwind
+Type: desktop-application
+Categories:
+ - Video
+ - Graphics
+PackagerName: Mark Washeim (poetaster)
+Custom:
+ - Repo: https://github.com/poetaster/Tailwind
+PackageIcon: https://github.com/poetaster/Tailwind/blob/main/gui/icons/256x256/TailWind.png?raw=true
+Url:
+ - Bugtracker: https://github.com/poetaster/Tailwind/issues
+Links:
+  Homepage: https://github.com/poetaster/Tailwind
+  Bugtracker: https://github.com/poetaster/Tailwind/issues
+  Donation: https://liberapay.com/poetaster
+%endif
 
 %prep
 %setup -q -n %{name}-%{version}
