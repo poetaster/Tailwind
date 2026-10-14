@@ -541,9 +541,8 @@ static DroidMediaCodec *create_encoder(Runner *runner, int *chosen_format) {
 }
 
 int encoder_start(Runner *runner) {
-    /* droidmedia must stay initialized for the whole daemon lifetime:
-     * init/deinit per recording does not survive in a long-lived process.
-     * Deinit happens only in cleanup() (daemon shutdown). */
+    /* droidmedia stays initialized for the whole daemon lifetime:
+     * Deinit happens only at cleanup() (daemon shutdown). */
     if (!runner->droid_inited) {
         if (!droid_media_init()) {
             set_error("encoder_start: droid_media_init failed");
@@ -552,14 +551,14 @@ int encoder_start(Runner *runner) {
         }
         runner->droid_inited = 1;
     }
-    printf("RESULT_DROID_INIT 1\n");
-
     pthread_mutex_init(&runner->enc.mutex, NULL);
     runner->enc.codec = create_encoder(runner, &runner->enc.chosen_format);
-    if (!runner->enc.codec) { set_error("encoder_start: no usable encoder format"); return 0; }
-    printf("RESULT_ENCODER_STARTED 1\n");
-    printf("RESULT_CHOSEN_FORMAT %d\n", runner->enc.chosen_format);
 
+    if (!runner->enc.codec) {
+        set_error("encoder_start: no usable encoder format"); return 0;
+    }
+
+    printf("RESULT_CHOSEN_FORMAT %d\n", runner->enc.chosen_format);
 
     runner->enc.last_pts_us = -1;
     runner->enc.nominal_frame_us =
@@ -1098,6 +1097,7 @@ int droidrec_start(const DroidRecOptions *opts)
 
     Runner *runner = s_runner;
     {
+        // the path can't actually be undefined?
         const char *want = opts->out_path ? opts->out_path : "/home/defaultuser/Videos/tailwind.ts";
         char *dup = strdup(want);
         if (dup) {
@@ -1110,6 +1110,9 @@ int droidrec_start(const DroidRecOptions *opts)
     runner->target_fps = opts->target_fps > 0 ? opts->target_fps : 24;
     runner->bitrate    = opts->bitrate > 0 ? opts->bitrate : DEFAULT_BITRATE;
     runner->seconds    = opts->seconds;  /* 0 = record until droidrec_stop() */
+    /* this is currently backwards. We should use a user option to specify
+     * maximum recording length when no intervention takes place
+     */
     if (opts->width > 0 && opts->height > 0) {
         runner->width  = opts->width;
         runner->height = opts->height;

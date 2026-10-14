@@ -88,6 +88,7 @@ typedef struct EncoderState {
     pthread_mutex_t mutex;
 } EncoderState;
 
+
 typedef struct Runner {
     struct wl_display *display;
     struct wl_registry *registry;
