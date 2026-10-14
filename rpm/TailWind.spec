@@ -56,7 +56,6 @@ Links:
   Bugtracker: https://github.com/poetaster/Tailwind/issues
   Donation: https://liberapay.com/poetaster
 %endif
-
 %prep
 %setup -q -n %{name}-%{version}
 
