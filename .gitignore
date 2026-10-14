@@ -11,15 +11,6 @@ moc_*
 Makefile
 *.ts
 *.qm
-.graptos-backups/
-.graptos-save-*.tmp
-.graptos-latex-build/
-build/
-.zig-cache/
-git_check.sh
-.graptos/
-.graptos-task.ini
 .sfdk
-logs_jp2/
 RPM/
 *.rpm
