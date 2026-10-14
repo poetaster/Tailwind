@@ -92,6 +92,7 @@ Page {
         path: "/de/poetaster/tailwind"
         property int fps: 24
         property int bitrate: 24
+        property int scale: 1
         property int startdelay: 0
     }
 
@@ -174,6 +175,7 @@ Page {
                         delayTimer.running = true
                         tickTimer.running = true
                     } else if (serviceState == 2) {
+                        console.log("stop called from button or top menu")
                         dbus.call("Stop")
                     }
                 }

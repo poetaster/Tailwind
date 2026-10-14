@@ -3,6 +3,11 @@ import Sailfish.Silica 1.0
 
 CoverBackground {
     Label {
+        id: name
+        text: "Tailwind"
+        anchors.bottom: label.top
+    }
+    Label {
         id: label
         anchors.centerIn: parent
         text: {
