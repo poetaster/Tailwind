@@ -88,7 +88,7 @@ typedef struct EncoderState {
     pthread_mutex_t mutex;
 } EncoderState;
 
-typedef struct App {
+typedef struct Runner {
     struct wl_display *display;
     struct wl_registry *registry;
     struct wl_shm *shm;
@@ -135,7 +135,7 @@ typedef struct App {
 
     double start_seconds;
     double last_progress;
-} App;
+} Runner;
 
 /* Options accepted by droidrec_start(). Any field set to 0 (or NULL for
  * out_path) falls back to a sensible default. */
@@ -173,18 +173,18 @@ double now_seconds(void);
 int64_t now_monotonic_us(void);
 
 /* Capture pipeline */
-int create_capture_buffer(App *app, CaptureBuffer *buf);
-void request_one(App *app);
+int create_capture_buffer(Runner *app, CaptureBuffer *buf);
+void request_one(Runner *app);
 void *worker_thread(void *arg);
 
 /* Encoder */
-int encoder_start(App *app);
-void encoder_stop(App *app);
+int encoder_start(Runner *app);
+void encoder_stop(Runner *app);
 
 /* App lifecycle */
-void stop_worker(App *app);
-void print_result(App *app);
-void cleanup(App *app);
+void stop_worker(Runner *app);
+void print_result(Runner *app);
+void cleanup(Runner *app);
 
 /* Wayland listeners (installed by the application) */
 extern const struct lipstick_recorder_listener recorder_listener;

@@ -46,8 +46,8 @@ Recorder *Recorder::instance()
 Recorder::Options Recorder::readOptions()
 {
     /* Settings are stored by the GUI via Nemo.Configuration (dconf) at
-     * /de/poetaster/tailwind and read here, exactly like the reference
-     * screenrecorder daemon reads /org/coderus/screenrecorder. */
+     * /de/poetaster/tailwind and read here, as in
+     * screenrecorder /org/coderus/screenrecorder. */
     MDConfGroup dconf(QStringLiteral("/de/poetaster/tailwind"));
     Options o;
     o.destination = dconf.value(QStringLiteral("destination"), QString::fromUtf8(kDefaultVideosDir)).toString();
@@ -114,13 +114,15 @@ bool Recorder::start()
         }
         m_startInProgress = true;
     }
-
-    const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
+    /* same naming convention as in screenrecorder
+    * and the same date format as jolla gallery
+    */
+    const QString dateString = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
     QString path;
     int fps, bitrate, seconds, width, height;
     {
         QMutexLocker locker(&m_mutex);
-        path = m_options.destination + QStringLiteral("/tailwind-%1.ts").arg(stamp);
+        path = m_options.destination + QStringLiteral("/tailwind-%1.ts").arg(dateString);
         m_currentPath = path;
         fps     = m_options.fps;
         bitrate = m_options.bitrate;
@@ -129,19 +131,15 @@ bool Recorder::start()
         height  = m_options.height;
     }
 
-    /* droidrec_start() strdups out_path, so the QByteArray only needs to stay
-     * alive for the duration of the call. Capturing it by value in the worker
-     * lambda keeps the backing store alive for exactly that window. */
     const QByteArray outPath = path.toUtf8();
-
     qCDebug(logrecorder) << "Starting (async):" << path
                          << "fps=" << fps
                          << "bitrate=" << bitrate
                          << "seconds=" << seconds;
 
-    /* droidrec_start() can block (codec setup) and must never run on the Qt
-     * event-loop thread: that would stall D-Bus replies and signal delivery.
-     * Run it on a detached worker; the status update + signals are emitted
+    /* droidrec_start() can block, maybe, so don't run on the Qt
+     * event-loop thread:  * Run it on a detached worker;
+     * the status update + signals are emitted
      * from that worker, Qt auto-queues them back to the main thread. */
     std::thread([this, outPath, fps, bitrate, seconds, width, height]() {
         DroidRecOptions opts;
@@ -191,9 +189,10 @@ QString Recorder::stop()
     setStatus(StatusSaving);
 
     /* droidrec_stop() drains the encoder (up to ~2s) and pthread_joins the
-     * codec/worker threads. Running that on the event-loop thread would hang
-     * D-Bus and the UI. Run it on a detached worker instead and report the
-     * finished file from that worker once finalisation is done. */
+     * codec/worker threads.
+     * Run it on a detached worker and report the
+     * finished file from that worker once cleanup is done. */
+
     std::thread([this, path]() {
         const int rc = droidrec_stop();
         {
