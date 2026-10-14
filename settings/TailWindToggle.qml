@@ -12,14 +12,6 @@ SettingsToggle {
     /* 0 = unknown/not started, 1 = Ready, 2 = Recording, 3 = Saving */
     property int serviceState: 0
     property bool startedFromToggle: false
-    property bool requestInFlight: false
-
-    Timer {
-        id: inFlightTimer
-        interval: 5000
-        repeat: false
-        onTriggered: requestInFlight = false
-    }
 
     DBusInterface {
         id: dbus
@@ -30,8 +22,6 @@ SettingsToggle {
         signalsEnabled: true
 
         function stateChanged(newState) {
-            requestInFlight = false
-            inFlightTimer.stop()
             if (serviceState !== newState)
                 serviceState = newState
         }
@@ -52,28 +42,6 @@ SettingsToggle {
         }
     }
 
-    /* NOTE: use dbus.call(), not dbus.typedCall(), for Start/Stop.
-     * Stop() is declared Q_NOREPLY; Nemo.DBus's callback-based
-     * typedCall() does not complete for no-reply methods, so the
-     * call never lands. dbus.call() is the pattern the working
-     * reference (screenrecorder) and the app GUI use. */
-    function startRecording() {
-        if (requestInFlight)
-            return
-        requestInFlight = true
-        inFlightTimer.start()
-        startedFromToggle = true
-        dbus.call("Start")
-    }
-
-    function stopRecording() {
-        if (requestInFlight)
-            return
-        requestInFlight = true
-        inFlightTimer.start()
-        dbus.call("Stop")
-    }
-
     Lipstick.LauncherItem {
         id: settingsLauncher
         filePath: "/usr/share/applications/TailWind.desktop"
@@ -82,21 +50,18 @@ SettingsToggle {
     name: qsTr("Record screen")
     icon.source: "image://theme/icon-m-camera"
 
-    /* ON only while actually recording. While saving (state 3) the
-     * toggle shows OFF + busy spinner, so a "stop" tap never bounces
-     * back to ON. Taps while busy are rejected by the toggle itself. */
     checked: serviceState === 2
     active: serviceState === 2
-    busy: serviceState === 3 || requestInFlight
+    busy: serviceState === 3
     activeText: qsTr("Recording...")
 
     onToggled: {
         if (serviceState <= 1) {
-            startRecording()
+            startedFromToggle = true
+            dbus.call("Start")
         } else if (serviceState === 2) {
-            stopRecording()
+            dbus.call("Stop")
         }
-        /* state 3: already blocked by `busy` (in-progress error) */
     }
 
     menu: ContextMenu {
