@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: 2013 - 2024 Jolla Ltd.
+# SPDX-FileCopyrightText: 2025 Jolla Mobile Ltd
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+*.o
+*.so
+moc_*
+*.moc
+*.pro.user
+Makefile
+*.ts
+*.qm
+.graptos-backups/
+.graptos-save-*.tmp
+.graptos-latex-build/
+build/
+.zig-cache/
+git_check.sh
+.graptos/
+.graptos-task.ini
+.sfdk
+logs_jp2/
+RPM/
+*.rpm

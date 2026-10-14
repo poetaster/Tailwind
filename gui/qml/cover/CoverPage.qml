@@ -6,6 +6,7 @@ CoverBackground {
         id: name
         text: "Tailwind"
         anchors.bottom: label.top
+        anchors.horizontalCenter: parent.horizontalCenter
     }
     Label {
         id: label

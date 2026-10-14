@@ -9,8 +9,8 @@ Summary:    Sailfish screen recorder
 Version:    0.1.0
 Release:    1
 Group:      System/GUI/Other
-License:    LICENSE
-URL:        https://github.com/poetaster/screenrecorder
+License:    GPLv3
+URL:        https://github.com/poetaster/Tailwind
 Source0:    %{name}-%{version}.tar.bz2
 
 Requires:   sailfishsilica-qt5 >= 0.10.9a
@@ -36,10 +36,8 @@ BuildRequires:  sailfish-svg2png
 
 
 %description
-TailWind is a SailfishOS screen recorder. A non-privileged daemon captures the
-screen over the Wayland lipstick-recorder protocol, hardware-encodes it to
-H.264 with droidmedia and muxes it to MPEG-TS. The GUI and a top-menu settings
-toggle drive the daemon over the D-Bus session bus (de.poetaster.tailwind).
+TailWind is a SailfishOS screen recorder with a top-menu toggle,
+app for settings and recording on a timer. Videos is hardware compressed.
 
 
 %prep
