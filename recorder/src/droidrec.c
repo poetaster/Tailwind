@@ -1054,7 +1054,12 @@ void *audio_thread(void *arg) {
 
             int left = a->s16_count - AAC_FRAME_SAMPLES;
             if (left > 0) {
-                memmove(a->s16_buf, a->s16_buf + AAC_FRAME_SAMPLES,
+                /* s16_buf holds INTERLEAVED stereo: frame k is at
+                 * s16_buf[2k]/[2k+1]. We consumed AAC_FRAME_SAMPLES frames
+                 * (= AAC_FRAME_SAMPLES * channels int16_t's), so the source
+                 * offset must skip that many int16_t's, not frames. */
+                memmove(a->s16_buf,
+                        a->s16_buf + (size_t)AAC_FRAME_SAMPLES * a->channels,
                         (size_t)left * a->channels * sizeof(int16_t));
             }
             a->s16_count = left;
@@ -1280,8 +1285,9 @@ int droidrec_audio_feed(const int16_t *pcm, int samples) {
         if (needed > newcap) {
             /* FIFO full: drop the oldest samples instead of growing
              * unbounded (encoder is behind; better to stay in sync) */
-            int drop = needed - newcap;
-            memmove(a->s16_buf, a->s16_buf + drop,
+            int drop = needed - newcap; /* drop is a frame count */
+            memmove(a->s16_buf,
+                    a->s16_buf + (size_t)drop * a->channels,
                     (size_t)(a->s16_count - drop) * a->channels * sizeof(int16_t));
             a->s16_count -= drop;
         }
