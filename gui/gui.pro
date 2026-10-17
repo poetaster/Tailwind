@@ -25,9 +25,9 @@ HEADERS += src/audiofeeder.h \
 
 LIBS += -lpulse
 
-# QAudioInput for AudioFeeder (PulseAudio backend); streamfilter.cpp
-# uses libpulse directly
-QT += dbus multimedia
+# audiofeeder.cpp and streamfilter.cpp both use libpulse directly
+# (no QAudioInput: Qt 5.6.3's PulseAudio backend corrupted the capture)
+QT += dbus multimedia   # multimedia: still needed by the QML's MediaPlayer
 
 DISTFILES += \ \
     qml/TailWind.qml \
