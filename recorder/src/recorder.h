@@ -56,7 +56,8 @@ public:
     static Options readOptions();
 
 signals:
-    /* NOTE: int, not Status. This signal is emitted from a worker thread
+    /* NOTE:  need to examine again, but
+     * int, not Status. This signal is emitted from a worker thread
      * (droidrec runs off the event loop), so the connection is queued.
      * Qt 5.6 cannot queue unregistered enum types and drops the signal
      * silently; int is a built-in meta type and always works. */
@@ -81,9 +82,10 @@ private:
     bool    m_shutdown        = false;
     QWaitCondition m_opCond;      /* signalled when a start/stop worker finishes */
     Options m_options;
-    QString m_currentPath; /* persistent buffer backing droidrec's out_path */
+    /* persistent var backing droidrec's out_path, probably redundant */
+    QString m_currentPath;
 
-    friend class DBusAdaptor;
+    friend class DBusAdaptor; // this is uncessarry
 };
 
 #endif /* TAILWIND_RECORDER_H */
