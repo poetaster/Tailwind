@@ -15,10 +15,6 @@
         <source>Ready</source>
         <translation type="unfinished"></translation>
     </message>
-    <message>
-        <source>TailWind</source>
-        <translation type="unfinished"></translation>
-    </message>
 </context>
 <context>
     <name>FirstPage</name>
@@ -64,6 +60,10 @@
     </message>
     <message>
         <source>%1 Mbit/s</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>System audio</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
