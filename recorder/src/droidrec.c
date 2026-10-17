@@ -826,10 +826,21 @@ static int audio_write_packet(Runner *runner) {
     a->pkt->stream_index = a->out_stream->index;
     a->pkt->pos = -1;
 
-    if (a->pkt->pts != AV_NOPTS_VALUE)
-        a->pkt->pts = av_rescale_q(a->pkt->pts, a->aac->time_base, a->out_stream->time_base);
-    if (a->pkt->dts != AV_NOPTS_VALUE)
-        a->pkt->dts = av_rescale_q(a->pkt->dts, a->aac->time_base, a->out_stream->time_base);
+    /* The native AAC encoder derives each output DTS as (PTS - one frame),
+     * so the very first audio packet comes out with a *negative* DTS
+     * (-1024 samples = -1920 on the mpegts 90 kHz scale) and the muxer
+     * warns "Packets poorly interleaved, failed to avoid negative
+     * timestamp". AAC has no reordering, so we assign our own monotonic,
+     * non-negative DTS/PTS (starting at 0) and step by the packet's own
+     * duration. This is independent of the encoder's internal delay and
+     * stays clean across the flush/drain packets too. */
+    int64_t step = (a->pkt->duration != AV_NOPTS_VALUE)
+        ? av_rescale_q(a->pkt->duration, a->aac->time_base, a->out_stream->time_base)
+        : AAC_FRAME_SAMPLES;
+    if (step <= 0) step = AAC_FRAME_SAMPLES;
+    a->pkt->dts = a->pkt_dts;
+    a->pkt->pts = a->pkt_dts;
+    a->pkt_dts += step;
 
     pthread_mutex_lock(&enc->mutex);
     if (enc->mux) {
@@ -913,6 +924,7 @@ int audio_prepare(Runner *runner) {
 
     memset(a, 0, sizeof(*a));
     a->pcm_fd = -1;
+    a->pkt_dts = 0;   /* audio output DTS starts at 0 (see audio_write_packet) */
 
     printf("AUDIO sink=%s (PCM is fed over D-Bus from the GUI)\n", runner->audio_sink);
 

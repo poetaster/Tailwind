@@ -124,6 +124,7 @@ typedef struct AudioState {
     AVPacket        *pkt;
     struct SwrContext *swr;       /* S16 interleaved -> FLTP, same rate */
     uint64_t         next_pts;       /* in samples; stream time_base = 1/rate */
+    int64_t          pkt_dts;        /* audio output DTS, stream time_base; starts at 0 */
 
     volatile int     running;
     int              thread_started;
