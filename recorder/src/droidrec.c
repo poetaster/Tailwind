@@ -753,19 +753,26 @@ void encoder_stop(Runner *runner) {
 
 
 /* ------------------------------------------------------------------------
- * Optional audio: the GUI captures the monitor of the selected pulse sink
- * (i.e. system audio, not the microphone) with libpulse -- it runs in the
- * user's session and can reach the pulse socket, unlike this daemon -- and
- * feeds raw S16LE/stereo/48 kHz PCM to this backend over D-Bus
- * (droidrec_audio_feed()). The backend encodes it as AAC (native encoder,
- * 1024-sample frames) and interleaves it into the same MPEG-TS mux as the
- * video stream.
+ * Optional audio: the GUI captures audio (microphone) with QAudioInput in
+ * the user session and appends raw S16LE/stereo/48 kHz PCM to a file in a
+ * shared location. This daemon tails that file (audio_file_thread) into a
+ * small FIFO; the audio thread (audio_thread) drains the FIFO in
+ * 1024-sample chunks, encodes AAC (native encoder) and interleaves the
+ * packets into the same MPEG-TS mux as the video stream.
  *
- * Threading: droidrec_audio_feed() (D-Bus adaptor thread) appends S16LE
- * frames to a small FIFO protected by buf_mutex/buf_cond. The audio thread
- * (audio_thread) drains the FIFO in 1024-sample chunks and encodes. Writes
- * go through enc.mutex, the same lock the video path holds in
- * encoded_available(). The audio stream is added to the muxer in
+ * Why a file and not D-Bus: a synchronous D-Bus round-trip per 8 KB chunk
+ * stalls the capture pump and the result crackles; a local append is just
+ * a write(2) and keeps up at ~200 KB/s with headroom.
+ *
+ * EOF contract: the GUI closes the file BEFORE calling EndAudio.
+ * read() on a regular file never blocks, it returns whatever is there, so
+ * the tailer polls with short sleeps; it exits once the file is drained
+ * and eof is set, then calls droidrec_audio_end().
+ *
+ * Threading: audio_file_thread (tailer) appends S16LE frames to the FIFO
+ * protected by buf_mutex/buf_cond. The audio thread drains the FIFO and
+ * encodes. Mux writes go through enc.mutex, the same lock the video path
+ * holds in encoded_available(). The audio stream is added to the muxer in
  * audio_prepare(), which runs BEFORE avformat_write_header().
  * ------------------------------------------------------------------------ */
 
@@ -776,6 +783,10 @@ void encoder_stop(Runner *runner) {
 static void audio_free_audio(Runner *runner) {
     AudioState *a = &runner->audio;
     a->running = 0;
+    if (a->pcm_fd >= 0) {
+        close(a->pcm_fd);
+        a->pcm_fd = -1;
+    }
     pthread_mutex_lock(&a->buf_mutex);
     pthread_cond_broadcast(&a->buf_cond);
     pthread_mutex_unlock(&a->buf_mutex);
@@ -892,6 +903,7 @@ int audio_prepare(Runner *runner) {
     }
 
     memset(a, 0, sizeof(*a));
+    a->pcm_fd = -1;
 
     printf("AUDIO sink=%s (PCM is fed over D-Bus from the GUI)\n", runner->audio_sink);
 
@@ -1069,7 +1081,7 @@ void *audio_thread(void *arg) {
 void audio_stop(Runner *runner) {
     AudioState *a = &runner->audio;
 
-    if (!a->active && !a->thread_started) {
+    if (!a->active && !a->thread_started && !a->file_thread_started) {
         return; /* video-only run: nothing to stop */
     }
 
@@ -1087,6 +1099,13 @@ void audio_stop(Runner *runner) {
     pthread_mutex_unlock(&a->buf_mutex);
     if (a->encode_error) {
         fprintf(stderr, "AUDIO encode error\n");
+    }
+    /* join the tailer FIRST: until it exits it may still be pushing
+     * samples into the FIFO, and the final flush below must see the last
+     * of them. It wakes within one 5 ms poll since running==0 above. */
+    if (a->file_thread_started) {
+        pthread_join(a->file_thread, NULL);
+        a->file_thread_started = 0;
     }
     if (a->thread_started) {
         pthread_join(a->thread, NULL);
@@ -1118,18 +1137,66 @@ void audio_stop(Runner *runner) {
            (long long)a->frames_read, (long long)a->packets_out,
            (long long)a->bytes_out, a->errors);
 
+    /* the audio pipeline is fully drained and flushed into the mux:
+     * remove the shared PCM file now, so the next recording starts
+     * from a clean slate. A missing file (video-only run, or the GUI
+     * failed to prepare) is fine. */
+    if (unlink(TAILWIND_AUDIO_PCM_PATH) == 0)
+        printf("AUDIO pcm file removed: %s\n", TAILWIND_AUDIO_PCM_PATH);
+    else if (errno != ENOENT)
+        fprintf(stderr, "AUDIO cannot remove %s: %s\n",
+                TAILWIND_AUDIO_PCM_PATH, strerror(errno));
+
     /* keep counters for print_result(); release the resources */
     audio_free_audio(runner);
 }
 
 
 /* ------------------------------------------------------------------------
- * Audio feed API -- called from the D-Bus adaptor. The GUI captures the
- * monitor of the selected sink and pushes raw S16LE/stereo/48 kHz PCM.
+ * Audio feed API -- called from the D-Bus adaptor. The GUI appends raw
+ * S16LE/stereo/48 kHz PCM to a shared file; the daemon tails it.
  * ------------------------------------------------------------------------ */
 
 int droidrec_audio_active(void) {
     return (s_runner && s_runner->audio.active) ? 1 : 0;
+}
+
+/* Tail the PCM file the GUI is appending and push what appears into the
+ * encoder FIFO. read() on a regular file never blocks: it returns the
+ * bytes currently there, or 0 at the current end of file. So feed what
+ * we got, otherwise poll with a short sleep until the GUI signals the end
+ * (eof) or the recording is stopped (running goes 0). */
+void *audio_file_thread(void *arg) {
+    Runner *runner = (Runner *)arg;
+    AudioState *a = &runner->audio;
+    uint8_t buf[8192];
+
+    for (;;) {
+        const ssize_t n = read(a->pcm_fd, buf, sizeof(buf));
+        if (n > 0) {
+            const int samples = (int)(n / ((size_t)2 * a->channels));
+            if (samples > 0)
+                droidrec_audio_feed((const int16_t *)buf, samples);
+            continue;
+        }
+        if (n < 0) {
+            if (errno == EINTR)
+                continue;
+            a->errors++;
+            fprintf(stderr, "AUDIO file read error: %s\n", strerror(errno));
+            break;
+        }
+        /* nothing new yet: the GUI is still appending */
+        if (a->eof || !a->running)
+            break;
+        usleep(5 * 1000);
+    }
+
+    /* the file is fully read (or the run was aborted): let the encoder
+     * thread drain the FIFO and exit. droidrec_audio_end() is idempotent. */
+    droidrec_audio_end();
+    printf("AUDIO tailer done, samples fed=%lld\n", (long long)a->frames_read);
+    return NULL;
 }
 
 int droidrec_audio_begin(void) {
@@ -1141,20 +1208,49 @@ int droidrec_audio_begin(void) {
      * the audio stream yet (codec setup + mux header); wait for it, but bail
      * out early if the start already failed (worker never came up) */
     for (int i = 0; i < 100; i++) {
-        if (s_runner->audio.active) {
-            set_error("ok");
-            return 0;
-        }
+        if (s_runner->audio.active)
+            break;
         if (!s_runner->running && !s_runner->worker_started) break;
         usleep(50 * 1000);
     }
-    if (s_runner->audio.active) {
-        set_error("ok");
-        return 0;
+    if (!s_runner->audio.active) {
+        set_error("droidrec_audio_begin: audio is not active "
+                  "(sink not selected, or the recording failed to start)");
+        return -1;
     }
-    set_error("droidrec_audio_begin: audio is not active "
-              "(sink not selected, or the recording failed to start)");
-    return -1;
+    AudioState *a = &s_runner->audio;
+    if (a->file_thread_started) {
+        set_error("droidrec_audio_begin: already begun");
+        return -1;
+    }
+
+    /* The GUI creates (and truncates) the file before calling BeginAudio,
+     * but be tolerant of a small race: retry for a couple of seconds. */
+    int fd = -1;
+    for (int i = 0; i < 20; i++) {
+        fd = open(TAILWIND_AUDIO_PCM_PATH, O_RDONLY);
+        if (fd >= 0)
+            break;
+        if (errno != ENOENT) break;
+        usleep(100 * 1000);
+    }
+    if (fd < 0) {
+        set_error("droidrec_audio_begin: cannot open PCM file "
+                  "(GUI did not prepare it?)");
+        return -1;
+    }
+
+    a->pcm_fd = fd;
+    if (pthread_create(&a->file_thread, NULL, audio_file_thread, s_runner) != 0) {
+        close(fd);
+        a->pcm_fd = -1;
+        set_error("droidrec_audio_begin: pthread_create failed");
+        return -1;
+    }
+    a->file_thread_started = 1;
+    printf("AUDIO begin: tailing %s\n", TAILWIND_AUDIO_PCM_PATH);
+    set_error("ok");
+    return 0;
 }
 
 int droidrec_audio_feed(const int16_t *pcm, int samples) {

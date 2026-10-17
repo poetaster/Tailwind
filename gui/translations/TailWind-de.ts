@@ -63,10 +63,6 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>System audio</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
         <source>Capturing: %1 KiB %2</source>
         <translation type="unfinished"></translation>
     </message>
@@ -75,15 +71,15 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source> (media - recommended)</source>
+        <source>No audio</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source> (comms)</source>
+        <source>Microphone</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source> (null)</source>
+        <source>Audio</source>
         <translation type="unfinished"></translation>
     </message>
 </context>

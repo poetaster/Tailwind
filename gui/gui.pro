@@ -17,18 +17,16 @@ TARGET = TailWind
 CONFIG += sailfishapp
 
 SOURCES += src/main.cpp \
-          src/sinklist.cpp \
           src/audiofeeder.cpp \
           src/streamfilter.cpp
 
-HEADERS += src/sinklist.h \
-           src/audiofeeder.h \
+HEADERS += src/audiofeeder.h \
            src/streamfilter.h
 
 LIBS += -lpulse
 
-# QAudioInput for AudioFeeder (PulseAudio backend); sinklist.cpp and
-# streamfilter.cpp use libpulse directly
+# QAudioInput for AudioFeeder (PulseAudio backend); streamfilter.cpp
+# uses libpulse directly
 QT += dbus multimedia
 
 DISTFILES += \ \

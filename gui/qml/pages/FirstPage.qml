@@ -94,16 +94,29 @@ Page {
         }
 
         function startAudioFeed() {
-            console.log("audio: BeginAudio, sink:", conf.audiosink)
+            var pcmPath = audioFeeder.prepare()
+            if (pcmPath === "") {
+                console.warn("audio: prepare() failed:", audioFeeder.error)
+                return
+            }
+            console.log("audio: PCM file prepared at", pcmPath,
+                        "source:", conf.audiosink)
+            /* No arguments: the daemon opens the same fixed path
+             * (/home/defaultuser/Videos/tailwind_audio.pcm) by convention.
+             * Passing the path
+             * as a typed argument is what Nemo.DBus rejects on device
+             * with "Invalid type"; no-argument calls are the
+             * proven-working pattern (Start, Stop, EndAudio, GetState). */
             dbus.typedCall("BeginAudio", [], function(rc) {
                 if (rc != 0) {
                     console.warn("BeginAudio rejected (rc", rc + "): video-only recording")
+                    audioFeeder.stop()   /* close the prepared PCM file */
                     return
                 }
                 daemonAudio = true
                 /* mute the mic/sidetone playback streams BEFORE the
                  * capture starts, so microphone audio can't leak into
-                 * the monitor (Sail-Recorder's proven approach) */
+                 * the recording (Sail-Recorder's proven approach) */
                 var filterOk = (streamFilter && streamFilter.start())
                 if (!audioFeeder.start(conf.audiosink)) {
                     console.warn("audio capture failed to start:", audioFeeder.error)
@@ -116,18 +129,21 @@ Page {
                     console.warn("stream filter unavailable; mic may leak into the recording")
             }, function(err) {
                 console.warn("BeginAudio call failed:", err)
+                audioFeeder.stop()   /* close the prepared PCM file */
             })
         }
 
         /* close the daemon's audio pipeline exactly once, whether or not
          * the capture is still alive: the daemon's Stop path waits for
-         * EndAudio before it can flush and finish */
+         * EndAudio before it can flush and finish.
+         * Ordering matters: audioFeeder.stop() closes (flushes) the PCM
+         * file FIRST, so the daemon's tailer sees the end of file before
+         * EndAudio tells it to drain. */
         function endDaemonAudio() {
             if (!daemonAudio)
                 return
             daemonAudio = false
-            if (audioFeeder.running)
-                audioFeeder.stop()
+            audioFeeder.stop()
             dbus.call("EndAudio")
         }
 
@@ -162,34 +178,18 @@ Page {
 
     ListModel {
         id: audioSinkModel
-        /* droid-HAL sink hints (verified on the device): deep_buffer is
-         * the media sink (droid.output.media_latency), primary_output
-         * the comms sink (droid.output.voip). The media sink's monitor
-         * is the clean capture source. */
-        function sinkLabel(name) {
-            if (name === "sink.deep_buffer")
-                return name + qsTr(" (media - recommended)")
-            if (name === "sink.primary_output")
-                return name + qsTr(" (comms)")
-            if (name === "sink.null")
-                return name + qsTr(" (null)")
-            return name
-        }
+        /* capture sources: "mic" = direct microphone (source.primary_input,
+         * verified clean on the device); "" = video only. The Pulse
+         * sink-monitor (loopback) path is not offered: the droid-HAL
+         * monitor tap is voice-processed and sounds distorted on the
+         * device, whatever sink is chosen. */
         Component.onCompleted: {
             clear();
-            /* entry 0 = no audio (saved value "") */
-            append({ name: "", label: "No audio" });
-            if (sinkList && sinkList.ok) {
-                var names = sinkList.names();
-                for (var i = 0; i < names.length; i++)
-                    append({ name: names[i], label: sinkLabel(names[i]) });
-                console.log("audio sinks:", names.length);
-            } else {
-                console.warn("PulseAudio sink enumeration unavailable");
-            }
-            /* restore the saved selection if that sink still exists */
+            append({ name: "",    label: qsTr("No audio") });
+            append({ name: "mic", label: qsTr("Microphone") });
+            /* restore the saved selection */
             var sel = 0;
-            for (var j = 1; j < audioSinkModel.count; j++) {
+            for (var j = 0; j < audioSinkModel.count; j++) {
                 if (audioSinkModel.get(j).name === conf.audiosink) {
                     sel = j;
                     break;
@@ -256,7 +256,7 @@ Page {
             ComboBox {
                 id: audioSinkCombo
                 width: parent.width
-                label: qsTr("System audio")
+                label: qsTr("Audio")
                 currentIndex: 0
                 onCurrentIndexChanged: {
                     if (currentIndex >= 0 && currentIndex < audioSinkModel.count) {

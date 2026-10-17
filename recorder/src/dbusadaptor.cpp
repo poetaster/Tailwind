@@ -159,21 +159,10 @@ void DBusAdaptor::Stop()
 
 int DBusAdaptor::BeginAudio()
 {
+    qCDebug(logadaptor) << Q_FUNC_INFO << "pcm=" << TAILWIND_AUDIO_PCM_PATH;
     const int rc = droidrec_audio_begin();
     qCDebug(logadaptor) << Q_FUNC_INFO << "rc=" << rc
                         << (rc < 0 ? QString::fromUtf8(droidrec_last_error()) : QString());
-    return rc;
-}
-
-int DBusAdaptor::FeedAudio(const QByteArray &pcm)
-{
-    /* pcm: raw S16LE interleaved, GetAudioRate() Hz, GetAudioChannels() ch */
-    const int channels = droidrec_audio_channels();
-    if (channels <= 0 || pcm.isEmpty())
-        return -1;
-    const int samples = int(pcm.size() / (sizeof(int16_t) * (size_t)channels));
-    const int rc = droidrec_audio_feed(
-        reinterpret_cast<const int16_t *>(pcm.constData()), samples);
     return rc;
 }
 

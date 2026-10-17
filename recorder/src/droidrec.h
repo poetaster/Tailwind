@@ -106,6 +106,15 @@ typedef struct AudioState {
     int              eof;            /* 1 = droidrec_audio_end(): no more PCM */
     volatile int     encode_error;   /* runtime encoder failure */
 
+    /* PCM source: the GUI appends raw S16LE interleaved PCM to
+     * TAILWIND_AUDIO_PCM_PATH; a tailer thread (file_thread) reads it as
+     * it grows and pushes it into the s16_buf FIFO below. read() on a
+     * regular file never blocks, so the tailer polls with a short sleep
+     * between empty reads. */
+    int              pcm_fd;         /* open()ed for reading, -1 = none */
+    int              file_thread_started;
+    pthread_t        file_thread;
+
     /* AAC encoder + the audio stream in the muxer. The native AAC encoder
      * only accepts FLTP (planar float), so S16 PCM is converted with swr
      * before each avcodec_send_frame. */
@@ -129,6 +138,14 @@ typedef struct AudioState {
 
 
 #define AAC_FRAME_SAMPLES 1024
+
+/* The shared PCM file, agreed with the GUI by convention (NOT passed
+ * over D-Bus): the GUI captures S16LE/stereo/48 kHz with QAudioInput
+ * and appends it here; the daemon tails it. It lives next to the
+ * video output, which both sides can reach for sure (/tmp writes
+ * failed silently on device); the daemon removes it once the audio
+ * pipeline has drained (audio_stop). */
+#define TAILWIND_AUDIO_PCM_PATH "/home/defaultuser/Videos/tailwind_audio.pcm"
 
 
 typedef struct Runner {
@@ -238,7 +255,12 @@ void audio_stop(Runner *app);      /* join thread, flush encoder, free resources
 
 /* Audio feed API (called from the D-Bus adaptor) */
 int  droidrec_audio_active(void);  /* 1 = audio stream registered, accepting PCM */
-int  droidrec_audio_begin(void);   /* 0 = audio enabled for this recording */
+int  droidrec_audio_begin(void);
+    /* 0 = audio enabled: opens TAILWIND_AUDIO_PCM_PATH (created by the
+     * GUI, which calls BeginAudio only after preparing it) for reading
+     * and starts the tailer thread that feeds the encoder FIFO from it.
+     * The path is a fixed convention, not an argument: Nemo.DBus on the
+     * device rejects the string-argument call with "Invalid type". */
 int  droidrec_audio_feed(const int16_t *pcm, int samples); /* push S16LE interleaved samples */
 void droidrec_audio_end(void);     /* no more PCM; audio thread drains and exits */
 int  droidrec_audio_rate(void);    /* expected sample rate (48000) */
