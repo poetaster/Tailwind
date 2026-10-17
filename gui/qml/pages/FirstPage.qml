@@ -94,6 +94,33 @@ Page {
         property int bitrate: 24
         property int scale: 1
         property int startdelay: 0
+        property string audiosink: ""   /* pulse sink name; empty = video only */
+    }
+
+    ListModel {
+        id: audioSinkModel
+        Component.onCompleted: {
+            clear();
+            /* entry 0 = no audio (saved value "") */
+            append({ name: "", label: "No audio" });
+            if (sinkList && sinkList.ok) {
+                var names = sinkList.names();
+                for (var i = 0; i < names.length; i++)
+                    append({ name: names[i], label: names[i] });
+                console.log("audio sinks:", names.length);
+            } else {
+                console.warn("PulseAudio sink enumeration unavailable");
+            }
+            /* restore the saved selection if that sink still exists */
+            var sel = 0;
+            for (var j = 1; j < audioSinkModel.count; j++) {
+                if (audioSinkModel.get(j).name === conf.audiosink) {
+                    sel = j;
+                    break;
+                }
+            }
+            audioSinkCombo.currentIndex = sel;
+        }
     }
 
     SilicaFlickable {
@@ -147,6 +174,29 @@ Page {
                 valueText: qsTr("%1 Mbit/s").arg(value)
                 onReleased: {
                     conf.bitrate = value
+                }
+            }
+
+            ComboBox {
+                id: audioSinkCombo
+                width: parent.width
+                label: qsTr("System audio")
+                currentIndex: 0
+                onCurrentIndexChanged: {
+                    if (currentIndex >= 0 && currentIndex < audioSinkModel.count) {
+                        conf.audiosink = audioSinkModel.get(currentIndex).name
+                    } else {
+                        conf.audiosink = ""
+                    }
+                }
+                menu: ContextMenu {
+                    Repeater {
+                        model: audioSinkModel
+                        MenuItem {
+                            text: label
+                            font.pixelSize: Theme.fontSizeExtraSmall
+                        }
+                    }
                 }
             }
 
