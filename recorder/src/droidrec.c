@@ -215,6 +215,15 @@ static void *event_loop_thread(void *arg) {
 }
 
 
+/*
+ * Minimum spacing between consecutive video timestamps, in microseconds.
+ * The mpegts muxer runs on a 90 kHz base (~11.1 us per tick), so a bump
+ * smaller than one tick collapses to a duplicate DTS and is rejected
+ * ("non monotonically increasing dts"). 1 ms (~90 ticks) clears it while
+ * adding negligible drift.
+ */
+#define MIN_TS_STEP_US 1000
+
 static int pts_push(EncoderState *enc, int64_t pts_us) {
     PtsNode *node = (PtsNode *)malloc(sizeof(PtsNode));
 
@@ -388,8 +397,8 @@ static void encoded_available(void *data, DroidMediaCodecData *encoded) {
         );
     }
 
-    if (enc->last_pts_us >= 0 && pts_us <= enc->last_pts_us) {
-        pts_us = enc->last_pts_us + 1;
+    if (enc->last_pts_us >= 0 && pts_us <= enc->last_pts_us + MIN_TS_STEP_US) {
+        pts_us = enc->last_pts_us + MIN_TS_STEP_US;
     }
 
     enc->last_pts_us = pts_us;
@@ -597,7 +606,7 @@ int encoder_start(Runner *runner) {
     }
 
     runner->enc.stream->time_base =
-        (AVRational){ 1, 1000 };
+        (AVRational){ 1, 1000000 };
 
     runner->enc.stream->avg_frame_rate =
         (AVRational){ runner->target_fps, 1 };
