@@ -6,7 +6,7 @@
 
 Name:       TailWind
 Summary:    Sailfish screen recorder
-Version:    0.1.0
+Version:    0.3.0
 Release:    1
 Group:      System/GUI/Other
 License:    GPLv3
