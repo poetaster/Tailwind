@@ -56,6 +56,7 @@ Recorder::Options Recorder::readOptions()
     o.seconds = dconf.value(QStringLiteral("seconds"), 0).toInt();            /* 0 = record until stop() */
     o.width   = 0;   /* native */
     o.height  = 0;   /* native */
+    o.audioSink = dconf.value(QStringLiteral("audiosink"), QString()).toString(); /* empty = video only */
     return o;
 }
 
@@ -112,6 +113,13 @@ bool Recorder::start()
             qWarning(logrecorder) << Q_FUNC_INFO << "start already in progress";
             return false;
         }
+        /* Re-read current settings from dconf so the GUI's latest values are
+         * authoritative at record time. The GUI (Nemo.Configuration) writes the
+         * selected audio sink to dconf, possibly *after* this lazily-activated
+         * daemon read it once at startup, and there is no SetAudioSink D-Bus call
+         * to push it -- so a stale/empty cached value would wrongly disable audio.
+         * The GUI is the settings source of truth and does not use the Set* methods. */
+        m_options = readOptions();
         m_startInProgress = true;
     }
     /* same naming convention as in screenrecorder
@@ -120,6 +128,7 @@ bool Recorder::start()
     const QString dateString = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
     QString path;
     int fps, bitrate, seconds, width, height;
+    QString audioSink;
     {
         QMutexLocker locker(&m_mutex);
         path = m_options.destination + QStringLiteral("/tailwind-%1.ts").arg(dateString);
@@ -129,19 +138,22 @@ bool Recorder::start()
         seconds = m_options.seconds;
         width   = m_options.width;
         height  = m_options.height;
+        audioSink = m_options.audioSink;
     }
 
     const QByteArray outPath = path.toUtf8();
+    const QByteArray sinkName = audioSink.toUtf8();
     qCDebug(logrecorder) << "Starting (async):" << path
                          << "fps=" << fps
                          << "bitrate=" << bitrate
-                         << "seconds=" << seconds;
+                         << "seconds=" << seconds
+                         << "audiosink=" << (sinkName.isEmpty() ? QStringLiteral("(none)") : QString::fromUtf8(sinkName));
 
     /* droidrec_start() can block, maybe, so don't run on the Qt
      * event-loop thread:  * Run it on a detached worker;
      * the status update + signals are emitted
      * from that worker, Qt auto-queues them back to the main thread. */
-    std::thread([this, outPath, fps, bitrate, seconds, width, height]() {
+    std::thread([this, outPath, sinkName, fps, bitrate, seconds, width, height]() {
         DroidRecOptions opts;
         opts.out_path   = outPath.constData();
         opts.target_fps = fps;
@@ -149,6 +161,7 @@ bool Recorder::start()
         opts.seconds    = seconds;
         opts.width      = width;
         opts.height     = height;
+        opts.audio_sink = sinkName.isEmpty() ? nullptr : sinkName.constData();
 
         const int rc = droidrec_start(&opts);
         {

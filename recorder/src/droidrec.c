@@ -119,6 +119,7 @@ static void reset_recording_counters(Runner *runner) {
     runner->sum_delta = 0;
     runner->delta_count = 0;
     runner->last_progress = -1.0;
+    memset(&runner->audio, 0, sizeof(runner->audio));
 
     pthread_mutex_lock(&runner->queue.mutex);
     runner->queue.head = 0;
@@ -637,6 +638,24 @@ int encoder_start(Runner *runner) {
         }
     }
 
+    /* Register the audio stream (if a sink was selected) so it is part of
+     * the written header. A failure here is fatal: the user explicitly
+     * asked for audio. */
+    if (!audio_prepare(runner)) {
+        if (runner->enc.codec) {
+            droid_media_codec_stop(runner->enc.codec);
+            droid_media_codec_destroy(runner->enc.codec);
+            runner->enc.codec = NULL;
+        }
+        if (!(runner->enc.mux->oformat->flags & AVFMT_NOFILE)) {
+            avio_closep(&runner->enc.mux->pb);
+        }
+        avformat_free_context(runner->enc.mux);
+        runner->enc.mux = NULL;
+        runner->enc.stream = NULL;
+        return 0;
+    }
+
     mux_result = avformat_write_header(
         runner->enc.mux,
         NULL
@@ -730,6 +749,473 @@ void encoder_stop(Runner *runner) {
     /* NOTE: droid_media_deinit() intentionally NOT called here.
      * The daemon re-uses droidmedia for the next recording; it is
      * deinitialized in cleanup() when the daemon shuts down. */
+}
+
+
+/* ------------------------------------------------------------------------
+ * Optional audio: the GUI captures the monitor of the selected pulse sink
+ * (i.e. system audio, not the microphone) with libpulse -- it runs in the
+ * user's session and can reach the pulse socket, unlike this daemon -- and
+ * feeds raw S16LE/stereo/48 kHz PCM to this backend over D-Bus
+ * (droidrec_audio_feed()). The backend encodes it as AAC (native encoder,
+ * 1024-sample frames) and interleaves it into the same MPEG-TS mux as the
+ * video stream.
+ *
+ * Threading: droidrec_audio_feed() (D-Bus adaptor thread) appends S16LE
+ * frames to a small FIFO protected by buf_mutex/buf_cond. The audio thread
+ * (audio_thread) drains the FIFO in 1024-sample chunks and encodes. Writes
+ * go through enc.mutex, the same lock the video path holds in
+ * encoded_available(). The audio stream is added to the muxer in
+ * audio_prepare(), which runs BEFORE avformat_write_header().
+ * ------------------------------------------------------------------------ */
+
+#define AUDIO_RATE 48000
+#define AUDIO_CHANNELS 2
+#define AUDIO_FIFO_MAX_SAMPLES (32 * AAC_FRAME_SAMPLES) /* ~0.7 s cap */
+
+static void audio_free_audio(Runner *runner) {
+    AudioState *a = &runner->audio;
+    a->running = 0;
+    pthread_mutex_lock(&a->buf_mutex);
+    pthread_cond_broadcast(&a->buf_cond);
+    pthread_mutex_unlock(&a->buf_mutex);
+    if (a->aac) avcodec_free_context(&a->aac);
+    a->aac = NULL;
+    if (a->swr) swr_free(&a->swr);
+    a->swr = NULL;
+    if (a->enc_frame) av_frame_free(&a->enc_frame);
+    a->enc_frame = NULL;
+    if (a->pkt) av_packet_free(&a->pkt);
+    a->pkt = NULL;
+    free(a->s16_buf);
+    a->s16_buf = NULL;
+    a->s16_capacity = 0;
+    a->s16_count = 0;
+    a->out_stream = NULL;
+    a->active = 0;
+}
+
+/* Write one AAC packet (a->pkt) into the mux, under the encoder lock. */
+static int audio_write_packet(Runner *runner) {
+    AudioState *a = &runner->audio;
+    EncoderState *enc = &runner->enc;
+    int result = 0;
+
+    if (!a->pkt || !a->out_stream) return -1;
+
+    a->pkt->stream_index = a->out_stream->index;
+    a->pkt->pos = -1;
+
+    if (a->pkt->pts != AV_NOPTS_VALUE)
+        a->pkt->pts = av_rescale_q(a->pkt->pts, a->aac->time_base, a->out_stream->time_base);
+    if (a->pkt->dts != AV_NOPTS_VALUE)
+        a->pkt->dts = av_rescale_q(a->pkt->dts, a->aac->time_base, a->out_stream->time_base);
+
+    pthread_mutex_lock(&enc->mutex);
+    if (enc->mux) {
+        /* av_interleaved_write_frame() unrefs the packet on success (and
+         * on failure), after which pkt->size reads 0, so capture the size
+         * before the call. Do not unref a->pkt ourselves: the muxer owns
+         * it after this point. */
+        const int pkt_size = a->pkt->size;
+        result = av_interleaved_write_frame(enc->mux, a->pkt);
+        if (result < 0) {
+            a->errors++;
+            fprintf(stderr, "AUDIO_MUX_WRITE_ERROR result=%d\n", result);
+        } else {
+            a->packets_out++;
+            a->bytes_out += pkt_size;
+        }
+    }
+    pthread_mutex_unlock(&enc->mutex);
+    return result;
+}
+
+/* Convert interleaved S16 PCM (samples per channel) into the FLTP encoder
+ * frame, zero-padding short frames so the encoder always gets exactly
+ * AAC_FRAME_SAMPLES samples. */
+static int audio_fill_frame(Runner *runner, const int16_t *s16, int samples) {
+    AudioState *a = &runner->audio;
+    const uint8_t *in[1] = { (const uint8_t *)s16 };
+    int out = 0;
+    int ret;
+
+    ret = swr_convert(a->swr, a->enc_frame->data, AAC_FRAME_SAMPLES,
+                      in, samples);
+    if (ret < 0) {
+        a->errors++;
+        fprintf(stderr, "AUDIO_SWR_ERROR ret=%d\n", ret);
+        return -1;
+    }
+    out = ret;
+
+    for (int ch = 0; ch < a->channels; ch++) {
+        if (out < AAC_FRAME_SAMPLES)
+            memset(a->enc_frame->data[ch] + (size_t)out * sizeof(float), 0,
+                   (size_t)(AAC_FRAME_SAMPLES - out) * sizeof(float));
+    }
+    a->enc_frame->nb_samples = AAC_FRAME_SAMPLES;
+    return 0;
+}
+
+/* Encode a->enc_frame (already filled) and drain resulting packets. */
+static int audio_encode_frame(Runner *runner) {
+    AudioState *a = &runner->audio;
+    int ret;
+
+    ret = avcodec_send_frame(a->aac, a->enc_frame);
+    if (ret < 0) {
+        a->errors++;
+        fprintf(stderr, "AUDIO_ENC_SEND_ERROR %d\n", ret);
+        return -1;
+    }
+
+    for (;;) {
+        ret = avcodec_receive_packet(a->aac, a->pkt);
+        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) break;
+        if (ret < 0) {
+            a->errors++;
+            fprintf(stderr, "AUDIO_ENC_RECV_ERROR %d\n", ret);
+            return -1;
+        }
+        audio_write_packet(runner);
+    }
+    return 0;
+}
+
+int audio_prepare(Runner *runner) {
+    AudioState *a = &runner->audio;
+
+    if (!runner->audio_sink || runner->audio_sink[0] == '\0') {
+        printf("AUDIO disabled (no sink selected)\n");
+        return 1; /* video only: nothing to prepare */
+    }
+
+    memset(a, 0, sizeof(*a));
+
+    printf("AUDIO sink=%s (PCM is fed over D-Bus from the GUI)\n", runner->audio_sink);
+
+    pthread_mutex_init(&a->buf_mutex, NULL);
+    pthread_cond_init(&a->buf_cond, NULL);
+    a->rate = AUDIO_RATE;
+    a->channels = AUDIO_CHANNELS;
+
+    const AVCodec *aac_codec = avcodec_find_encoder(AV_CODEC_ID_AAC);
+    if (!aac_codec) {
+        set_error("audio_prepare: no native AAC encoder found");
+        audio_free_audio(runner);
+        return 0;
+    }
+
+    a->aac = avcodec_alloc_context3(aac_codec);
+    if (!a->aac) {
+        set_error("audio_prepare: AAC context alloc failed");
+        audio_free_audio(runner);
+        return 0;
+    }
+    a->aac->codec_type = AVMEDIA_TYPE_AUDIO;
+    /* the native AAC encoder only accepts FLTP (planar float) */
+    a->aac->sample_fmt = AV_SAMPLE_FMT_FLTP;
+    a->aac->sample_rate = a->rate;
+    av_channel_layout_default(&a->aac->ch_layout, a->channels); /* order must be known: 2ch = stereo */
+    a->aac->bit_rate = 128000;
+
+    if (avcodec_open2(a->aac, aac_codec, NULL) < 0) {
+        set_error("audio_prepare: AAC open failed");
+        audio_free_audio(runner);
+        return 0;
+    }
+
+    /* S16 interleaved (what the GUI feeds) -> FLTP (what the encoder
+     * wants); same rate, so this is a plain sample-format conversion */
+    AVChannelLayout in_layout, out_layout;
+    av_channel_layout_default(&in_layout, a->channels);
+    av_channel_layout_default(&out_layout, a->channels);
+
+    a->swr = NULL;
+    if (swr_alloc_set_opts2(&a->swr, &out_layout, AV_SAMPLE_FMT_FLTP, a->rate,
+                            &in_layout, AV_SAMPLE_FMT_S16, a->rate,
+                            0, NULL) < 0 || !a->swr) {
+        set_error("audio_prepare: resampler alloc failed");
+        audio_free_audio(runner);
+        return 0;
+    }
+    if (swr_init(a->swr) < 0) {
+        set_error("audio_prepare: resampler init failed");
+        audio_free_audio(runner);
+        return 0;
+    }
+
+    /* add the audio stream to the mux BEFORE avformat_write_header() */
+    a->out_stream = avformat_new_stream(runner->enc.mux, aac_codec);
+    if (!a->out_stream) {
+        set_error("audio_prepare: mux audio stream failed");
+        audio_free_audio(runner);
+        return 0;
+    }
+    a->out_stream->time_base = (AVRational){ 1, a->rate };
+    a->out_stream->codecpar->codec_id = AV_CODEC_ID_AAC;
+    a->out_stream->codecpar->sample_rate = a->rate;
+    av_channel_layout_default(&a->out_stream->codecpar->ch_layout, a->channels);
+    a->out_stream->codecpar->bit_rate = 128000;
+
+    /* The mpegts muxer only builds its ADTS sub-muxer (which frames each
+     * raw AAC packet at write time) when the stream carries the
+     * AudioSpecificConfig; the native AAC encoder leaves it in
+     * aac->extradata after avcodec_open2(). Without it the muxer logs
+     * "AAC bitstream not in ADTS format and extradata missing" per
+     * packet and the track is undecodable. Must be set BEFORE
+     * avformat_write_header(). */
+    if (a->aac->extradata && a->aac->extradata_size > 0) {
+        a->out_stream->codecpar->extradata =
+            av_malloc(a->aac->extradata_size);
+        if (!a->out_stream->codecpar->extradata) {
+            set_error("audio_prepare: extradata alloc failed");
+            audio_free_audio(runner);
+            return 0;
+        }
+        memcpy(a->out_stream->codecpar->extradata,
+               a->aac->extradata, a->aac->extradata_size);
+        a->out_stream->codecpar->extradata_size = a->aac->extradata_size;
+    } else {
+        set_error("audio_prepare: AAC encoder produced no extradata");
+        audio_free_audio(runner);
+        return 0;
+    }
+
+    a->enc_frame = av_frame_alloc();
+    a->pkt = av_packet_alloc();
+    if (!a->enc_frame || !a->pkt) {
+        set_error("audio_prepare: frame/packet alloc failed");
+        audio_free_audio(runner);
+        return 0;
+    }
+    av_channel_layout_default(&a->enc_frame->ch_layout, a->channels);
+    a->enc_frame->format = AV_SAMPLE_FMT_FLTP;
+    a->enc_frame->nb_samples = AAC_FRAME_SAMPLES;
+    if (av_frame_get_buffer(a->enc_frame, 0) < 0) {
+        set_error("audio_prepare: encoder frame alloc failed");
+        audio_free_audio(runner);
+        return 0;
+    }
+
+    a->s16_capacity = 8192; /* samples per channel; grown on demand */
+    a->s16_buf = (int16_t *)malloc((size_t)a->s16_capacity * a->channels * sizeof(int16_t));
+    if (!a->s16_buf) {
+        set_error("audio_prepare: accumulation buffer alloc failed");
+        audio_free_audio(runner);
+        return 0;
+    }
+
+    a->active = 1;
+    a->running = 1;
+    printf("AUDIO ready rate=%d ch=%d\n", a->rate, a->channels);
+    return 1;
+}
+
+void *audio_thread(void *arg) {
+    Runner *runner = (Runner *)arg;
+    AudioState *a = &runner->audio;
+
+    for (;;) {
+        pthread_mutex_lock(&a->buf_mutex);
+        while (a->running && !a->encode_error &&
+               a->s16_count < AAC_FRAME_SAMPLES && !a->eof)
+            pthread_cond_wait(&a->buf_cond, &a->buf_mutex);
+
+        if (a->s16_count >= AAC_FRAME_SAMPLES) {
+            /* take exactly one 1024-sample frame out of the FIFO, S16 -> FLTP */
+            int ret = audio_fill_frame(runner, a->s16_buf, AAC_FRAME_SAMPLES);
+            if (ret == 0) {
+                a->enc_frame->pts = a->next_pts;
+                a->next_pts += AAC_FRAME_SAMPLES;
+            }
+
+            int left = a->s16_count - AAC_FRAME_SAMPLES;
+            if (left > 0) {
+                memmove(a->s16_buf, a->s16_buf + AAC_FRAME_SAMPLES,
+                        (size_t)left * a->channels * sizeof(int16_t));
+            }
+            a->s16_count = left;
+            pthread_mutex_unlock(&a->buf_mutex);
+
+            if (ret < 0) {
+                a->encode_error = 1;
+                pthread_mutex_lock(&a->buf_mutex);
+                pthread_cond_broadcast(&a->buf_cond);
+                pthread_mutex_unlock(&a->buf_mutex);
+                break;
+            }
+            if (audio_encode_frame(runner) < 0) {
+                a->encode_error = 1;
+                pthread_mutex_lock(&a->buf_mutex);
+                pthread_cond_broadcast(&a->buf_cond);
+                pthread_mutex_unlock(&a->buf_mutex);
+                break;
+            }
+            continue;
+        }
+
+        int stop = !a->running || a->encode_error || a->eof;
+        pthread_mutex_unlock(&a->buf_mutex);
+        if (stop) break;
+    }
+
+    printf("AUDIO thread exiting read=%lld errors=%d\n",
+           (long long)a->frames_read, a->errors);
+    return NULL;
+}
+
+void audio_stop(Runner *runner) {
+    AudioState *a = &runner->audio;
+
+    if (!a->active && !a->thread_started) {
+        return; /* video-only run: nothing to stop */
+    }
+
+    /* Wake the audio thread under the FIFO mutex and signal via the
+     * condvar BEFORE joining: if droidrec_audio_end() was never called
+     * (EndAudio missing from the GUI), the thread is parked in
+     * pthread_cond_wait and a bare pthread_join would hang forever. */
+    pthread_mutex_lock(&a->buf_mutex);
+    a->running = 0;
+    if (!a->eof) {
+        a->eof = 1; /* treat stop as an implicit end-of-feed */
+        fprintf(stderr, "AUDIO end never signalled (EndAudio missing); flushing anyway\n");
+    }
+    pthread_cond_broadcast(&a->buf_cond);
+    pthread_mutex_unlock(&a->buf_mutex);
+    if (a->encode_error) {
+        fprintf(stderr, "AUDIO encode error\n");
+    }
+    if (a->thread_started) {
+        pthread_join(a->thread, NULL);
+        a->thread_started = 0;
+    }
+
+    /* encode the remaining partial frame (zero padded), then flush the
+     * AAC encoder so it emits the frames still buffered inside it */
+    if (a->aac && a->out_stream && runner->enc.mux && a->pkt) {
+        pthread_mutex_lock(&a->buf_mutex);
+        int have = a->s16_count;
+        if (have > 0) {
+            audio_fill_frame(runner, a->s16_buf, have);
+            a->enc_frame->pts = a->next_pts;
+            a->next_pts += AAC_FRAME_SAMPLES;
+        }
+        a->s16_count = 0;
+        pthread_mutex_unlock(&a->buf_mutex);
+
+        if (have > 0) audio_encode_frame(runner);
+        avcodec_send_frame(a->aac, NULL);
+        int ret;
+        while ((ret = avcodec_receive_packet(a->aac, a->pkt)) == 0) {
+            audio_write_packet(runner);
+        }
+    }
+
+    printf("AUDIO stopped samples=%lld packets=%lld bytes=%lld errors=%d\n",
+           (long long)a->frames_read, (long long)a->packets_out,
+           (long long)a->bytes_out, a->errors);
+
+    /* keep counters for print_result(); release the resources */
+    audio_free_audio(runner);
+}
+
+
+/* ------------------------------------------------------------------------
+ * Audio feed API -- called from the D-Bus adaptor. The GUI captures the
+ * monitor of the selected sink and pushes raw S16LE/stereo/48 kHz PCM.
+ * ------------------------------------------------------------------------ */
+
+int droidrec_audio_active(void) {
+    return (s_runner && s_runner->audio.active) ? 1 : 0;
+}
+
+int droidrec_audio_begin(void) {
+    if (!s_runner) {
+        set_error("droidrec_audio_begin: no recorder instance");
+        return -1;
+    }
+    /* droidrec_start() runs on a worker thread and may not have registered
+     * the audio stream yet (codec setup + mux header); wait for it, but bail
+     * out early if the start already failed (worker never came up) */
+    for (int i = 0; i < 100; i++) {
+        if (s_runner->audio.active) {
+            set_error("ok");
+            return 0;
+        }
+        if (!s_runner->running && !s_runner->worker_started) break;
+        usleep(50 * 1000);
+    }
+    if (s_runner->audio.active) {
+        set_error("ok");
+        return 0;
+    }
+    set_error("droidrec_audio_begin: audio is not active "
+              "(sink not selected, or the recording failed to start)");
+    return -1;
+}
+
+int droidrec_audio_feed(const int16_t *pcm, int samples) {
+    if (!s_runner) return -1;
+    AudioState *a = &s_runner->audio;
+    if (!pcm || samples <= 0) return -1;
+    if (!a->active || !a->s16_buf) {
+        set_error("droidrec_audio_feed: audio is not active");
+        return -1;
+    }
+
+    pthread_mutex_lock(&a->buf_mutex);
+    int needed = a->s16_count + samples;
+    if (needed > a->s16_capacity) {
+        int newcap = a->s16_capacity ? a->s16_capacity : AAC_FRAME_SAMPLES;
+        while (newcap < needed) newcap *= 2;
+        if (newcap > AUDIO_FIFO_MAX_SAMPLES) newcap = AUDIO_FIFO_MAX_SAMPLES;
+        if (needed > newcap) {
+            /* FIFO full: drop the oldest samples instead of growing
+             * unbounded (encoder is behind; better to stay in sync) */
+            int drop = needed - newcap;
+            memmove(a->s16_buf, a->s16_buf + drop,
+                    (size_t)(a->s16_count - drop) * a->channels * sizeof(int16_t));
+            a->s16_count -= drop;
+        }
+        int16_t *nb = (int16_t *)realloc(a->s16_buf,
+                (size_t)newcap * a->channels * sizeof(int16_t));
+        if (!nb) {
+            pthread_mutex_unlock(&a->buf_mutex);
+            a->errors++;
+            return -1;
+        }
+        a->s16_buf = nb;
+        a->s16_capacity = newcap;
+    }
+    memcpy(a->s16_buf + (size_t)a->s16_count * a->channels, pcm,
+           (size_t)samples * a->channels * sizeof(int16_t));
+    a->s16_count += samples;
+    a->frames_read += samples;
+    pthread_cond_broadcast(&a->buf_cond);
+    pthread_mutex_unlock(&a->buf_mutex);
+    return 0;
+}
+
+void droidrec_audio_end(void) {
+    if (!s_runner) return;
+    AudioState *a = &s_runner->audio;
+    if (!a->active) return;
+    pthread_mutex_lock(&a->buf_mutex);
+    a->eof = 1;
+    pthread_cond_broadcast(&a->buf_cond);
+    pthread_mutex_unlock(&a->buf_mutex);
+    printf("AUDIO end-of-feed (in-flight samples=%d)\n", a->s16_count);
+}
+
+int droidrec_audio_rate(void) {
+    return (s_runner && s_runner->audio.active) ? s_runner->audio.rate : AUDIO_RATE;
+}
+
+int droidrec_audio_channels(void) {
+    return (s_runner && s_runner->audio.active) ? s_runner->audio.channels : AUDIO_CHANNELS;
 }
 
 
@@ -978,6 +1464,9 @@ void stop_worker(Runner *runner) {
 
 void cleanup(Runner *runner) {
     stop_worker(runner);
+    audio_stop(runner);
+    free((void *)runner->audio_sink);
+    runner->audio_sink = NULL;
     encoder_stop(runner);
     for (int i = 0; i < CAPTURE_BUFFER_COUNT; i++) {
         if (runner->buffers[i].wl_buffer) wl_buffer_destroy(runner->buffers[i].wl_buffer);
@@ -1033,6 +1522,11 @@ void print_result(Runner *runner) {
         double avg_delta = (double)runner->sum_delta / (double)runner->delta_count;
         printf("RESULT_LIPSTICK_DELTA_MS avg=%.2f min=%u max=%u samples=%llu\n", avg_delta, runner->min_delta, runner->max_delta, (unsigned long long)runner->delta_count);
     }
+    printf("RESULT_AUDIO_SOURCE %s\n", runner->audio_sink ? runner->audio_sink : "(none)");
+    printf("RESULT_AUDIO_SAMPLES %lld\n", (long long)runner->audio.frames_read);
+    printf("RESULT_AUDIO_PACKETS %lld\n", (long long)runner->audio.packets_out);
+    printf("RESULT_AUDIO_BYTES %lld\n", (long long)runner->audio.bytes_out);
+    printf("RESULT_AUDIO_ERRORS %d\n", runner->audio.errors);
     printf("RESULT_OK %d\n", (bytes > 0 && packets > 0 && errs == 0 && !runner->failed) ? 1 : 0);
 }
 
@@ -1110,6 +1604,19 @@ int droidrec_start(const DroidRecOptions *opts)
     runner->target_fps = opts->target_fps > 0 ? opts->target_fps : 24;
     runner->bitrate    = opts->bitrate > 0 ? opts->bitrate : DEFAULT_BITRATE;
     runner->seconds    = opts->seconds;  /* 0 = record until droidrec_stop() */
+    /* the audio sink name is borrowed from the caller only until this point:
+     * keep an owned copy, ""/NULL = video only */
+    free((void *)runner->audio_sink);
+    runner->audio_sink = NULL;
+    if (opts->audio_sink && opts->audio_sink[0]) {
+        char *sink_dup = strdup(opts->audio_sink);
+        if (!sink_dup) {
+            set_error("droidrec_start: out of memory (audio_sink)");
+            return -1;
+        }
+        runner->audio_sink = sink_dup;
+    }
+    memset(&runner->audio, 0, sizeof(runner->audio));
     /* this is currently backwards. We should use a user option to specify
      * maximum recording length when no intervention takes place
      */
@@ -1119,8 +1626,9 @@ int droidrec_start(const DroidRecOptions *opts)
         runner->stride = runner->width * 4;
     }
 
-    printf("ARGS out=%s seconds=%d target_fps=%d bitrate=%d\n",
-           runner->out_path, runner->seconds, runner->target_fps, runner->bitrate);
+    printf("ARGS out=%s seconds=%d target_fps=%d bitrate=%d audio_sink=%s\n",
+           runner->out_path, runner->seconds, runner->target_fps, runner->bitrate,
+           runner->audio_sink ? runner->audio_sink : "(none)");
 
     reset_recording_counters(runner);
     memset(&runner->enc, 0, sizeof(runner->enc));
@@ -1133,16 +1641,33 @@ int droidrec_start(const DroidRecOptions *opts)
     }
 
     if (pthread_create(&runner->worker_thread, NULL, worker_thread, runner) != 0) {
+        audio_stop(runner);
         encoder_stop(runner);
         set_error("droidrec_start: worker thread failed");
         return -1;
     }
     runner->worker_started = 1;
 
+    /* audio thread: audio_prepare() has already registered the stream and
+     * set running=1 when a sink was selected; video-only runs no-op here */
+    if (runner->audio.active) {
+        if (pthread_create(&runner->audio.thread, NULL, audio_thread, runner) != 0) {
+            runner->audio.running = 0;
+            runner->audio.active = 0;
+            stop_worker(runner);
+            audio_stop(runner);
+            encoder_stop(runner);
+            set_error("droidrec_start: audio thread failed");
+            return -1;
+        }
+        runner->audio.thread_started = 1;
+    }
+
     runner->running = 1;
     if (pthread_create(&runner->event_thread, NULL, event_loop_thread, runner) != 0) {
         runner->running = 0;
         stop_worker(runner);
+        audio_stop(runner);
         encoder_stop(runner);
         set_error("droidrec_start: event loop thread failed");
         return -1;
@@ -1176,6 +1701,10 @@ int droidrec_stop(void)
     }
 
     stop_worker(runner);
+
+    /* Stop the audio thread and flush the AAC encoder BEFORE encoder_stop()
+     * releases the mux context. */
+    audio_stop(runner);
 
     int had_output = (runner->enc.encoded_bytes > 0 || runner->enc.encoded_packets > 0);
 

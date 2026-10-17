@@ -15,6 +15,8 @@ CoverBackground {
             if ( serviceState === 2 ) return qsTr("Recording...")
             if ( serviceState === 3 ) return qsTr("Saving...")
             if ( serviceState === 1 ) return qsTr("Ready")
+            return "..."
+            console.log(serviceState)
         }
     }
 

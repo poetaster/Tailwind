@@ -24,6 +24,7 @@
 #include <libavcodec/avcodec.h>
 #include <libavutil/avutil.h>
 #include <libavutil/mathematics.h>
+#include <libswresample/swresample.h>
 
 #define CAPTURE_BUFFER_COUNT 6
 #define CAPTURE_QUEUE_CAP 6
@@ -89,6 +90,47 @@ typedef struct EncoderState {
 } EncoderState;
 
 
+typedef struct AudioState {
+    /* capture parameters (fixed: the GUI captures via PulseAudio and
+     * guarantees S16LE/stereo/48 kHz, resampled/mixed by the server) */
+    int              rate;
+    int              channels;
+
+    /* S16 interleaved FIFO, shared with the D-Bus feed path */
+    pthread_mutex_t  buf_mutex;
+    pthread_cond_t   buf_cond;
+    int16_t         *s16_buf;
+    int              s16_capacity;   /* samples per channel */
+    int              s16_count;
+
+    int              eof;            /* 1 = droidrec_audio_end(): no more PCM */
+    volatile int     encode_error;   /* runtime encoder failure */
+
+    /* AAC encoder + the audio stream in the muxer. The native AAC encoder
+     * only accepts FLTP (planar float), so S16 PCM is converted with swr
+     * before each avcodec_send_frame. */
+    AVCodecContext  *aac;
+    AVStream        *out_stream;
+    AVFrame         *enc_frame;      /* 1024-sample FLTP frame for the encoder */
+    AVPacket        *pkt;
+    struct SwrContext *swr;       /* S16 interleaved -> FLTP, same rate */
+    uint64_t         next_pts;       /* in samples; stream time_base = 1/rate */
+
+    volatile int     running;
+    int              thread_started;
+    pthread_t        thread;
+    int              active;         /* 1 = encoder ready, accepting PCM */
+
+    long long        frames_read;
+    long long        packets_out;
+    long long        bytes_out;
+    int              errors;
+} AudioState;
+
+
+#define AAC_FRAME_SAMPLES 1024
+
+
 typedef struct Runner {
     struct wl_display *display;
     struct wl_registry *registry;
@@ -104,6 +146,8 @@ typedef struct Runner {
     int seconds;   /* 0 = record until droidrec_stop() is called */
     int bitrate;
     const char *out_path;
+    char *audio_sink;     /* owned strdup(); pulse sink name, NULL = no audio */
+    AudioState audio;
 
     int running;
     int failed;
@@ -147,6 +191,9 @@ typedef struct DroidRecOptions {
     int seconds;           /* 0 = record until droidrec_stop() */
     int width;             /* 0 = use current wl_output mode */
     int height;            /* 0 = use current wl_output mode */
+    const char *audio_sink;/* pulse SINK name to record (its .monitor source);
+                             NULL or "" = video only. The caller may free the
+                             string immediately: the backend keeps a copy. */
 } DroidRecOptions;
 
 /* --- record_stream API --------------------------------------------------
@@ -181,6 +228,21 @@ void *worker_thread(void *arg);
 /* Encoder */
 int encoder_start(Runner *app);
 void encoder_stop(Runner *app);
+
+/* Audio (optional): the GUI captures the monitor of the selected pulse sink
+ * and feeds raw S16LE/stereo/48 kHz PCM to this backend over D-Bus; the
+ * backend encodes it as AAC into the same muxed output. */
+int  audio_prepare(Runner *app);   /* AAC encoder + mux stream (called before write_header) */
+void *audio_thread(void *arg);     /* FIFO drain / encode / write loop */
+void audio_stop(Runner *app);      /* join thread, flush encoder, free resources */
+
+/* Audio feed API (called from the D-Bus adaptor) */
+int  droidrec_audio_active(void);  /* 1 = audio stream registered, accepting PCM */
+int  droidrec_audio_begin(void);   /* 0 = audio enabled for this recording */
+int  droidrec_audio_feed(const int16_t *pcm, int samples); /* push S16LE interleaved samples */
+void droidrec_audio_end(void);     /* no more PCM; audio thread drains and exits */
+int  droidrec_audio_rate(void);    /* expected sample rate (48000) */
+int  droidrec_audio_channels(void);/* expected channel count (2) */
 
 /* App lifecycle */
 void stop_worker(Runner *app);

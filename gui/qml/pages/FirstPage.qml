@@ -8,6 +8,12 @@ import QtMultimedia 5.6
 Page {
     id: page
     property bool startedFromToggle:false
+    property bool audioArmed:false   /* sink selected; start feed when state==2 */
+    /* BeginAudio succeeded on the daemon and EndAudio has not been sent
+     * yet. Independent of audioFeeder.running: if the capture dies
+     * mid-recording the daemon still has the audio pipeline open and
+     * MUST get EndAudio, or droidrec_stop() hangs on the audio thread. */
+    property bool daemonAudio:false
 
     MediaPlayer {
         id: tickPlayer
@@ -37,6 +43,12 @@ Page {
         function trigger() {
             if (serviceState == 1) {
                 dbus.call("Start")
+                if (conf.audiosink !== "") {
+                    /* the daemon is not recording yet; start the feed once
+                     * it reaches state 2 (see stateChanged below) */
+                    console.log("audio armed for sink:", conf.audiosink)
+                    audioArmed = true
+                }
             }
             delayTimer.stop();
             tickTimer.stop();
@@ -66,6 +78,57 @@ Page {
             if (repeatedGetState.running) {
                 repeatedGetState.stop()
             }
+            if (newState == 2 && audioArmed) {
+                audioArmed = false
+                startAudioFeed()
+            } else if (newState != 2) {
+                /* the recording is ending (normal stop, top menu, or the
+                 * daemon stopped itself): never let the capture or the
+                 * stream filter outlive it, and always close the daemon's
+                 * audio pipeline if it was opened */
+                endDaemonAudio()
+                if (streamFilter && streamFilter.active) {
+                    streamFilter.stop()
+                }
+            }
+        }
+
+        function startAudioFeed() {
+            console.log("audio: BeginAudio, sink:", conf.audiosink)
+            dbus.typedCall("BeginAudio", [], function(rc) {
+                if (rc != 0) {
+                    console.warn("BeginAudio rejected (rc", rc + "): video-only recording")
+                    return
+                }
+                daemonAudio = true
+                /* mute the mic/sidetone playback streams BEFORE the
+                 * capture starts, so microphone audio can't leak into
+                 * the monitor (Sail-Recorder's proven approach) */
+                var filterOk = (streamFilter && streamFilter.start())
+                if (!audioFeeder.start(conf.audiosink)) {
+                    console.warn("audio capture failed to start:", audioFeeder.error)
+                    endDaemonAudio()
+                    if (streamFilter && streamFilter.active)
+                        streamFilter.stop()
+                    return
+                }
+                if (!filterOk)
+                    console.warn("stream filter unavailable; mic may leak into the recording")
+            }, function(err) {
+                console.warn("BeginAudio call failed:", err)
+            })
+        }
+
+        /* close the daemon's audio pipeline exactly once, whether or not
+         * the capture is still alive: the daemon's Stop path waits for
+         * EndAudio before it can flush and finish */
+        function endDaemonAudio() {
+            if (!daemonAudio)
+                return
+            daemonAudio = false
+            if (audioFeeder.running)
+                audioFeeder.stop()
+            dbus.call("EndAudio")
         }
 
         function recordingFinished(filename) {
@@ -99,6 +162,19 @@ Page {
 
     ListModel {
         id: audioSinkModel
+        /* droid-HAL sink hints (verified on the device): deep_buffer is
+         * the media sink (droid.output.media_latency), primary_output
+         * the comms sink (droid.output.voip). The media sink's monitor
+         * is the clean capture source. */
+        function sinkLabel(name) {
+            if (name === "sink.deep_buffer")
+                return name + qsTr(" (media - recommended)")
+            if (name === "sink.primary_output")
+                return name + qsTr(" (comms)")
+            if (name === "sink.null")
+                return name + qsTr(" (null)")
+            return name
+        }
         Component.onCompleted: {
             clear();
             /* entry 0 = no audio (saved value "") */
@@ -106,7 +182,7 @@ Page {
             if (sinkList && sinkList.ok) {
                 var names = sinkList.names();
                 for (var i = 0; i < names.length; i++)
-                    append({ name: names[i], label: names[i] });
+                    append({ name: names[i], label: sinkLabel(names[i]) });
                 console.log("audio sinks:", names.length);
             } else {
                 console.warn("PulseAudio sink enumeration unavailable");
@@ -200,6 +276,15 @@ Page {
                 }
             }
 
+            Label {
+                id: audioStatus
+                width: parent.width
+                visible: text !== ""
+                text: audioFeeder.running
+                    ? qsTr("Capturing: %1 KiB %2").arg(Math.round(audioFeeder.bytes / 1024)).arg(audioFeeder.output)
+                    : (audioFeeder.error !== "" ? qsTr("Audio error: %1").arg(audioFeeder.error) : "")
+            }
+
             Button {
                 id: actionButton
                 anchors.horizontalCenter: parent.horizontalCenter
@@ -226,6 +311,16 @@ Page {
                         tickTimer.running = true
                     } else if (serviceState == 2) {
                         console.log("stop called from button or top menu")
+                        /* tell the daemon the stream is done (even if the
+                         * capture already died); Stop() then drains the
+                         * FIFO and flushes the AAC. dbus.*: endDaemonAudio
+                         * is a member of the DBusInterface object, not a
+                         * global function (QML scopes are per-object). */
+                        dbus.endDaemonAudio()
+                        /* release every sink input the filter muted */
+                        if (streamFilter && streamFilter.active) {
+                            streamFilter.stop()
+                        }
                         dbus.call("Stop")
                     }
                 }

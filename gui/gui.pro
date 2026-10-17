@@ -16,12 +16,22 @@ TARGET = TailWind
 
 CONFIG += sailfishapp
 
-SOURCES += src/main.cpp
+SOURCES += src/main.cpp \
+          src/sinklist.cpp \
+          src/audiofeeder.cpp \
+          src/streamfilter.cpp
 
-# The GUI drives the recorder daemon over the D-Bus session bus (DBusInterface)
-QT += dbus
+HEADERS += src/sinklist.h \
+           src/audiofeeder.h \
+           src/streamfilter.h
 
-DISTFILES += \
+LIBS += -lpulse
+
+# QAudioInput for AudioFeeder (PulseAudio backend); sinklist.cpp and
+# streamfilter.cpp use libpulse directly
+QT += dbus multimedia
+
+DISTFILES += \ \
     qml/TailWind.qml \
     qml/cover/CoverPage.qml \
     qml/pages/FirstPage.qml \

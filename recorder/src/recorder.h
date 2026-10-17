@@ -30,6 +30,7 @@ public:
         int     seconds;     /* 0 = record until stop() is called */
         int     width;       /* 0 = native output mode */
         int     height;      /* 0 = native output mode */
+        QString audioSink;   /* pulse SINK name; its .monitor is recorded; empty = no audio */
     };
 
     enum Status {

@@ -26,6 +26,14 @@ public slots:
     void Start();
     Q_NOREPLY void Stop();
 
+    /* Audio feed: the GUI captures the sink monitor and pushes raw
+     * S16LE/stereo/48 kHz PCM (see GetAudioRate/GetAudioChannels). */
+    int BeginAudio();
+    int FeedAudio(const QByteArray &pcm);
+    void EndAudio();
+    int GetAudioRate() const;
+    int GetAudioChannels() const;
+
     int GetState() const;
     QString GetLastError() const;
 

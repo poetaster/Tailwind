@@ -66,5 +66,25 @@
         <source>System audio</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>Capturing: %1 KiB %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Audio error: %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source> (media - recommended)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source> (comms)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source> (null)</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 </TS>

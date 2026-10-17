@@ -5,5 +5,5 @@ Requires=lipstick.service
 
 [Service]
 Type=dbus
-BusName=org.poetaster.screenrecorder
+BusName=de.poetaster.tailwind
 ExecStart=/usr/sbin/tailwind --daemon

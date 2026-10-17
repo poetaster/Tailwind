@@ -16,6 +16,7 @@ Source0:    %{name}-%{version}.tar.bz2
 Requires:   sailfishsilica-qt5 >= 0.10.9a
 Requires:   ffmpeg
 Requires:   ffmpeg-tools
+Requires:   pulseaudio
 
 BuildRequires:  pkgconfig(sailfishapp) >= 1.0.2
 BuildRequires:  pkgconfig(Qt5Qml)
@@ -30,6 +31,7 @@ BuildRequires:  ffmpeg-devel
 BuildRequires:  qt5-qtplatformsupport-devel
 BuildRequires:  qt5-qtwayland-wayland_egl-devel
 BuildRequires:  pkgconfig(wayland-client)
+BuildRequires:  pkgconfig(libpulse)
 BuildRequires:  pkgconfig(mlite5)
 BuildRequires:  systemd
 BuildRequires:  sailfish-svg2png

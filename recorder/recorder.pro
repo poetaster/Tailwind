@@ -29,7 +29,7 @@ HEADERS += \
     src/droidrec.h \
     src/wayland-lipstick-recorder-client-protocol.h
 
-LIBS += -lwayland-client -ldroidmedia -ldl -lavformat -lavcodec -lavutil -lpthread
+LIBS += -lwayland-client -ldroidmedia -ldl -lavformat -lavcodec -lavutil -lswresample -lpthread
 
 # D-Bus service activation (session bus) + system.d policy
 dbusService.files = dbus/de.poetaster.tailwind.service
