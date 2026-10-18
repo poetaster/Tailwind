@@ -212,10 +212,6 @@ QString Recorder::stop()
         {
             QMutexLocker locker(&m_mutex);
             m_stopInProgress = false;
-            /* Only a user Stop should trigger an exit. If a SIGTERM/Quit
-             * already drove us into handleShutDown(), that path owns the
-             * teardown (it calls handleShutDown() + qApp->quit() itself), so
-             * don't emit the shutdown alert again. */
             requestExit = !m_shutdown;
         }
         m_opCond.wakeAll();
@@ -235,6 +231,9 @@ QString Recorder::stop()
     return path;
 }
 
+/* Must be called on the Qt main thread (D-Bus slots, the shutdownRequested
+ * lambda, the signal self-pipe handler). Calling it from a POSIX signal
+ * handler is UB (QMutex/qCDebug/QWaitCondition) and SEGVs. */
 void Recorder::handleShutDown()
 {
     bool needStop = false;
@@ -252,27 +251,18 @@ void Recorder::handleShutDown()
 
     /* Wait for any in-flight start/stop worker to finish so the output file is
      * fully finalised (droidrec_stop writes the trailer and closes the muxer)
-     * before we let the process exit. */
+     * before we let the process exit.
+    */
     {
         QMutexLocker locker(&m_mutex);
         while (m_startInProgress || m_stopInProgress)
             m_opCond.wait(&m_mutex);
     }
 
-    /* Deliberately do NOT call droidrec_shutdown()/cleanup() here.
-     * Every caller of handleShutDown() exits the process immediately after
-     * (Stop-then-exit, SIGINT/SIGTERM, Quit), and the one-recording-per-process
-     * design means the daemon never lives on. The native/Wayland teardown in
-     * cleanup() (droid_media_deinit, the Wayland and lipstick object
-     * destruction) is thread-sensitive and SEGVs when run on the Qt main
-     * thread (it only survives on the worker std::thread that did the stop). Since the OS reclaims the
-     * Wayland socket, shared memory, codec library and s_runner on exit -- and
-     * the file is already written and closed by droidrec_stop() -- skipping the
-     * fragile explicit teardown is both safe and simpler. */
-
     /* Also deliberately do NOT announce StatusIdle: the last meaningful
      * broadcast already sent is StatusReady (from the stop worker). Leaving the
-     * GUI's cached state at Ready keeps its Record button armed, so the next
+     * GUI's state at Ready keeps its Record button armed, so the next
      * Start re-activates the daemon via D-Bus/systemd instead of the button
-     * being disabled at state 0. */
+     * being disabled at state 0.
+    */
 }

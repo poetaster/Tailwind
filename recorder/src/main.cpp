@@ -14,9 +14,11 @@
 #include <QCoreApplication>
 #include <QDebug>
 #include <QLoggingCategory>
+#include <QSocketNotifier>
 #include <QTimer>
 
 #include <signal.h>
+#include <unistd.h>
 
 Q_LOGGING_CATEGORY(logmain, "tailwind.main", QtDebugMsg)
 
@@ -31,10 +33,22 @@ static void initializeDBus()
     Recorder::instance()->init();
 }
 
+/* Self-pipe: the ONLY thing a POSIX signal handler may do here is a
+ * write(). Qt calls in signal context (QMutex, qCDebug/malloc, even
+ * QCoreApplication::quit) are UB and were the source of the SEGV on exit
+ * (systemd SIGTERMs a Type=dbus service as soon as the bus name is
+ * released during our own quit -- the old handler then re-entered
+ * Recorder::handleShutDown() on a thread that was mid-teardown).
+ * The QSocketNotifier wakes the main thread, which runs the real
+ * shutdown legally. */
+static int s_termPipe[2] = { -1, -1 };
+
 static void handleShutDownSignal(int)
 {
-    Recorder::instance()->handleShutDown();
-    qApp->quit();
+    if (s_termPipe[1] >= 0) {
+        const char c = 1;
+        (void)write(s_termPipe[1], &c, 1);
+    }
 }
 
 static void setShutDownSignal(int signalId)
@@ -105,6 +119,21 @@ int main(int argc, char *argv[])
 
     Recorder *recorder = new Recorder(&app);
     recorder->setOptions(options);
+
+    /* SIGINT/SIGTERM arrive in signal context: no Qt, no locks, no malloc.
+     * The handler writes one byte here; the main thread reacts and performs
+     * the real shutdown (stop in-flight recording, wait for the worker,
+     * quit), so even `systemctl stop` during a recording finalises the file. */
+    if (pipe(s_termPipe) == 0) {
+        QSocketNotifier *sn = new QSocketNotifier(s_termPipe[0], QSocketNotifier::Read, &app);
+        QObject::connect(sn, &QSocketNotifier::activated, &app, [recorder](int fd) {
+            char buf[64];
+            while (read(fd, buf, sizeof(buf)) > 0) { }
+            qCDebug(logmain) << "SIGINT/SIGTERM received; stopping and exiting";
+            recorder->handleShutDown();
+            qApp->quit();
+        });
+    }
 
     if (daemonize) {
         qCDebug(logmain) << "Running as D-Bus daemon (de.poetaster.tailwind)";
