@@ -206,7 +206,7 @@ static void *event_loop_thread(void *arg) {
             }
         }
         // we use the 'fixed' second to record as a guard.
-        // If someone forgets  to stop, it stops at runner->seconds
+        // If someone forgets  to stop, it stops at runner->seconds FIXME
         if (runner->seconds > 0 && now_seconds() - runner->start_seconds >= (double)runner->seconds) {
             runner->running = 0;
         }
@@ -222,8 +222,8 @@ static void *event_loop_thread(void *arg) {
  * ("non monotonically increasing dts"). 1 ms (~90 ticks) clears it while
  * adding negligible drift.
  */
-#define MIN_TS_STEP_US 1000
 
+#define MIN_TS_STEP_US 1000
 static int pts_push(EncoderState *enc, int64_t pts_us) {
     PtsNode *node = (PtsNode *)malloc(sizeof(PtsNode));
 
@@ -285,9 +285,9 @@ static void pts_clear_locked(EncoderState *enc) {
     enc->pts_count = 0;
 }
 
-
+/* buffer backing fd */
 static int create_tmp_file(size_t size) {
-    char path[] = "/tmp/sfrec-hw-shm-XXXXXX";
+    char path[] = "/tmp/droidrec-hw-shm-XXXXXX";
     int fd = mkstemp(path);
     if (fd < 0) { perror("mkstemp"); return -1; }
     unlink(path);
@@ -369,14 +369,9 @@ static void encoded_available(void *data, DroidMediaCodecData *encoded) {
     }
 
     pthread_mutex_lock(&enc->mutex);
-
     enc->encoded_bytes += encoded->data.size;
     enc->encoded_packets++;
 
-    /*
-     * Kaynak motor her senkron kareye SPS/PPS basliklarini ekliyor.
-     * Ayri codec-config paketi gelirse kare sayilmadan atlanir.
-     */
     if (encoded->codec_config) {
         enc->codec_config_packets++;
         pthread_mutex_unlock(&enc->mutex);
@@ -390,11 +385,7 @@ static void encoded_available(void *data, DroidMediaCodecData *encoded) {
             pts_us = enc->last_pts_us + enc->nominal_frame_us;
         }
 
-        fprintf(
-            stderr,
-            "PTS_QUEUE_EMPTY fallback=%lld\n",
-            (long long)pts_us
-        );
+        fprintf( stderr, "PTS_QUEUE_EMPTY fallback=%lld\n", (long long)pts_us );
     }
 
     if (enc->last_pts_us >= 0 && pts_us <= enc->last_pts_us + MIN_TS_STEP_US) {
@@ -455,13 +446,7 @@ static void encoded_available(void *data, DroidMediaCodecData *encoded) {
 
             if (result < 0) {
                 enc->errors++;
-
-                fprintf(
-                    stderr,
-                    "MUX_WRITE_ERROR result=%d pts_us=%lld\n",
-                    result,
-                    (long long)pts_us
-                );
+                fprintf( stderr, "MUX_WRITE_ERROR result=%d pts_us=%lld\n", result, (long long)pts_us );
             }
         }
 
@@ -491,6 +476,8 @@ static void *codec_loop_thread(void *arg) {
     }
     return NULL;
 }
+
+/* our hardware encoder. isn't it neat :) */
 
 static DroidMediaCodec *create_encoder(Runner *runner, int *chosen_format) {
     DroidMediaColourFormatConstants c;
@@ -584,11 +571,7 @@ int encoder_start(Runner *runner) {
     );
 
     if (mux_result < 0 || !runner->enc.mux) {
-        fprintf(
-            stderr,
-            "ERROR mux context result=%d\n",
-            mux_result
-        );
+        fprintf( stderr, "ERROR mux context result=%d\n", mux_result );
         set_error("encoder_start: mux context alloc failed");
         return 0;
     }
@@ -633,12 +616,7 @@ int encoder_start(Runner *runner) {
         );
 
         if (mux_result < 0) {
-            fprintf(
-                stderr,
-                "ERROR mux file open result=%d\n",
-                mux_result
-            );
-
+            fprintf( stderr, "ERROR mux file open result=%d\n", mux_result );
             avformat_free_context(runner->enc.mux);
             runner->enc.mux = NULL;
             runner->enc.stream = NULL;
@@ -648,8 +626,8 @@ int encoder_start(Runner *runner) {
     }
 
     /* Register the audio stream (if a sink was selected) so it is part of
-     * the written header. A failure here is fatal: the user explicitly
-     * asked for audio. */
+     * the written header.
+    */
     if (!audio_prepare(runner)) {
         if (runner->enc.codec) {
             droid_media_codec_stop(runner->enc.codec);
@@ -671,11 +649,7 @@ int encoder_start(Runner *runner) {
     );
 
     if (mux_result < 0) {
-        fprintf(
-            stderr,
-            "ERROR mux header result=%d\n",
-            mux_result
-        );
+        fprintf( stderr, "ERROR mux header result=%d\n", mux_result );
 
         if (!(runner->enc.mux->oformat->flags & AVFMT_NOFILE)) {
             avio_closep(&runner->enc.mux->pb);
@@ -701,6 +675,7 @@ int encoder_start(Runner *runner) {
     return 1;
 }
 
+/* all a bit hairy, but it just needs to tear down in order */
 void encoder_stop(Runner *runner) {
     if (runner->enc.codec) {
         droid_media_codec_drain(runner->enc.codec);
@@ -725,11 +700,7 @@ void encoder_stop(Runner *runner) {
         );
 
         if (trailer_result < 0) {
-            fprintf(
-                stderr,
-                "MUX_TRAILER_ERROR result=%d\n",
-                trailer_result
-            );
+            fprintf( stderr, "MUX_TRAILER_ERROR result=%d\n", trailer_result );
         }
 
         if (!(runner->enc.mux->oformat->flags & AVFMT_NOFILE)) {
@@ -761,29 +732,19 @@ void encoder_stop(Runner *runner) {
 }
 
 
-/* ------------------------------------------------------------------------
- * Optional audio: the GUI captures audio (microphone) with QAudioInput in
+/*
+ * Optional audio: the GUI captures audio (microphone) with pulse in
  * the user session and appends raw S16LE/stereo/48 kHz PCM to a file in a
  * shared location. This daemon tails that file (audio_file_thread) into a
  * small FIFO; the audio thread (audio_thread) drains the FIFO in
  * 1024-sample chunks, encodes AAC (native encoder) and interleaves the
  * packets into the same MPEG-TS mux as the video stream.
  *
- * Why a file and not D-Bus: a synchronous D-Bus round-trip per 8 KB chunk
- * stalls the capture pump and the result crackles; a local append is just
- * a write(2) and keeps up at ~200 KB/s with headroom.
- *
  * EOF contract: the GUI closes the file BEFORE calling EndAudio.
  * read() on a regular file never blocks, it returns whatever is there, so
  * the tailer polls with short sleeps; it exits once the file is drained
  * and eof is set, then calls droidrec_audio_end().
- *
- * Threading: audio_file_thread (tailer) appends S16LE frames to the FIFO
- * protected by buf_mutex/buf_cond. The audio thread drains the FIFO and
- * encodes. Mux writes go through enc.mutex, the same lock the video path
- * holds in encoded_available(). The audio stream is added to the muxer in
- * audio_prepare(), which runs BEFORE avformat_write_header().
- * ------------------------------------------------------------------------ */
+ */
 
 #define AUDIO_RATE 48000
 #define AUDIO_CHANNELS 2
@@ -846,8 +807,8 @@ static int audio_write_packet(Runner *runner) {
     if (enc->mux) {
         /* av_interleaved_write_frame() unrefs the packet on success (and
          * on failure), after which pkt->size reads 0, so capture the size
-         * before the call. Do not unref a->pkt ourselves: the muxer owns
-         * it after this point. */
+         * before the call.
+         */
         const int pkt_size = a->pkt->size;
         result = av_interleaved_write_frame(enc->mux, a->pkt);
         if (result < 0) {
@@ -1112,9 +1073,7 @@ void audio_stop(Runner *runner) {
     }
 
     /* Wake the audio thread under the FIFO mutex and signal via the
-     * condvar BEFORE joining: if droidrec_audio_end() was never called
-     * (EndAudio missing from the GUI), the thread is parked in
-     * pthread_cond_wait and a bare pthread_join would hang forever. */
+     * conditional BEFORE joining: if droidrec_audio_end() was never called*/
     pthread_mutex_lock(&a->buf_mutex);
     a->running = 0;
     if (!a->eof) {
@@ -1128,7 +1087,8 @@ void audio_stop(Runner *runner) {
     }
     /* join the tailer FIRST: until it exits it may still be pushing
      * samples into the FIFO, and the final flush below must see the last
-     * of them. It wakes within one 5 ms poll since running==0 above. */
+     * of them.
+     */
     if (a->file_thread_started) {
         pthread_join(a->file_thread, NULL);
         a->file_thread_started = 0;
@@ -1164,9 +1124,8 @@ void audio_stop(Runner *runner) {
            (long long)a->bytes_out, a->errors);
 
     /* the audio pipeline is fully drained and flushed into the mux:
-     * remove the shared PCM file now, so the next recording starts
-     * from a clean slate. A missing file (video-only run, or the GUI
-     * failed to prepare) is fine. */
+     * remove the shared PCM file now,
+     */
     if (unlink(TAILWIND_AUDIO_PCM_PATH) == 0)
         printf("AUDIO pcm file removed: %s\n", TAILWIND_AUDIO_PCM_PATH);
     else if (errno != ENOENT)
@@ -1178,20 +1137,19 @@ void audio_stop(Runner *runner) {
 }
 
 
-/* ------------------------------------------------------------------------
+/*
  * Audio feed API -- called from the D-Bus adaptor. The GUI appends raw
  * S16LE/stereo/48 kHz PCM to a shared file; the daemon tails it.
- * ------------------------------------------------------------------------ */
+ */
 
 int droidrec_audio_active(void) {
     return (s_runner && s_runner->audio.active) ? 1 : 0;
 }
 
 /* Tail the PCM file the GUI is appending and push what appears into the
- * encoder FIFO. read() on a regular file never blocks: it returns the
- * bytes currently there, or 0 at the current end of file. So feed what
- * we got, otherwise poll with a short sleep until the GUI signals the end
- * (eof) or the recording is stopped (running goes 0). */
+ * encoder FIFO.
+ */
+
 void *audio_file_thread(void *arg) {
     Runner *runner = (Runner *)arg;
     AudioState *a = &runner->audio;
