@@ -176,7 +176,6 @@ Page {
             clear();
             append({ name: "",                    label: qsTr("No audio") });
             append({ name: "mic",                 label: qsTr("Microphone") });
-            append({ name: "sink.primary_output", label: qsTr("Monitor") });
             /* restore the saved selection */
             var sel = 0;
             for (var j = 0; j < audioSinkModel.count; j++) {

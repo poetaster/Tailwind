@@ -244,6 +244,7 @@ bool AudioFeeder::sourceExists(const QString &name)
         QMutexLocker locker(&m_lock);
         if (!m_sourceDecided)
             m_sourceQuery.wait(&m_lock, kQueryTimeoutMs);
+        qWarning() << "AudioFeeder: source found" << name << "m_sourceFound";
         return m_sourceFound;
     }
 }
