@@ -1,7 +1,9 @@
 # Tailwind
-A sailfishos app to do screen recording videos. It uses hardware acceleration via SFOS droidmedia. This version has been tested on the xperia 10iii  with SFOS 5.1 but does NOT work with SFOS 5.0 on, for instance, a volla 22. YMMV
+A sailfishos app to do screen recording videos. It uses hardware acceleration via SFOS droidmedia. This version has been tested on the xperia 10iii  with SFOS 5.1 and a Jolla2026 with 5.2, but does NOT work with SFOS 5.0 on, for instance, a volla 22. YMMV
 
 The app features a countdown timer. A top menu toggle is also installed, though it does not use the timer.
+
+As of verision 0.3.0 the mic source can be recorded so you can do running commentary. The quality is microphone leve, so not so hot. Audio is only supported when the gui is running.
 
 Most of the application originated in @coderus screenrecorder, a fork of which I also maintain at https://github.com/poetaster/screenrecorder.
 
