@@ -34,13 +34,11 @@ static void initializeDBus()
 }
 
 /* Self-pipe: the ONLY thing a POSIX signal handler may do here is a
- * write(). Qt calls in signal context (QMutex, qCDebug/malloc, even
- * QCoreApplication::quit) are UB and were the source of the SEGV on exit
+ * write().  QCoreApplication::quit was the source of the SEGV on exit
  * (systemd SIGTERMs a Type=dbus service as soon as the bus name is
  * released during our own quit -- the old handler then re-entered
- * Recorder::handleShutDown() on a thread that was mid-teardown).
- * The QSocketNotifier wakes the main thread, which runs the real
- * shutdown legally. */
+ * Recorder::handleShutDown() on a thread that tearing down).
+  */
 static int s_termPipe[2] = { -1, -1 };
 
 static void handleShutDownSignal(int)
@@ -139,21 +137,6 @@ int main(int argc, char *argv[])
         qCDebug(logmain) << "Running as D-Bus daemon (de.poetaster.tailwind)";
         setShutDownSignal(SIGINT);   /* Ctrl-C */
         setShutDownSignal(SIGTERM);  /* systemctl stop / kill */
-        /* One-recording-per-process: once a Stop has fully completed, finalise
-         * the file (already done by the stop worker's droidrec_stop) and exit.
-         * The GUI re-activates the daemon on the next Start (D-Bus/systemd).
-         * This keeps the daemon from holding stuck state across recordings.
-         * The quit is deferred by one tick so the in-flight D-Bus signals
-         * (StateChanged, RecordingFinished) are delivered to the GUI first.
-         *
-         * shutdownRequested is emitted from a detached std::thread (the stop
-         * worker), which is NOT a QThread, so QTimer/quit cannot be used on it
-         * ("Timers can only be used with threads started with QThread"). Passing
-         * qApp as the context object makes this a queued connection (emit thread
-         * != qApp's main thread), so the lambda runs on the Qt main thread where
-         * handleShutDown() + QTimer::singleShot() are legal. A context-less
-         * functor connect would instead run the lambda on the non-Qt worker
-         * thread and silently drop the quit. */
         QObject::connect(recorder, &Recorder::shutdownRequested, qApp, [recorder]() {
             recorder->handleShutDown();
             QTimer::singleShot(0, qApp, &QCoreApplication::quit);
