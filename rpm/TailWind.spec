@@ -71,12 +71,6 @@ Links:
 rm -rf %{buildroot}
 %qmake5_install
 
-%post
-systemctl-user start tailwind.service
-
-%preun
-systemctl-user stop tailwind.service
-
 %postun
 systemctl-user stop tailwind.service
 
