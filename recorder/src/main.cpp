@@ -116,9 +116,16 @@ int main(int argc, char *argv[])
          * This keeps the daemon from holding stuck state across recordings.
          * The quit is deferred by one tick so the in-flight D-Bus signals
          * (StateChanged, RecordingFinished) are delivered to the GUI first.
-         * Emitted from a worker thread, so this connection is queued and the
-         * lambda runs on the GUI/main thread. */
-        QObject::connect(recorder, &Recorder::shutdownRequested, [recorder]() {
+         *
+         * shutdownRequested is emitted from a detached std::thread (the stop
+         * worker), which is NOT a QThread, so QTimer/quit cannot be used on it
+         * ("Timers can only be used with threads started with QThread"). Passing
+         * qApp as the context object makes this a queued connection (emit thread
+         * != qApp's main thread), so the lambda runs on the Qt main thread where
+         * handleShutDown() + QTimer::singleShot() are legal. A context-less
+         * functor connect would instead run the lambda on the non-Qt worker
+         * thread and silently drop the quit. */
+        QObject::connect(recorder, &Recorder::shutdownRequested, qApp, [recorder]() {
             recorder->handleShutDown();
             QTimer::singleShot(0, qApp, &QCoreApplication::quit);
         });
