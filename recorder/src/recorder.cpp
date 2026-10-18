@@ -20,7 +20,9 @@ namespace {
 Recorder *s_instance = nullptr;
 
 /* Default output directory. On Sailfish the recording daemon runs with access
- * to the primary user's home; the original droidrec used this path too. */
+ * to the primary user's home; the original droidrec used this path too.
+ * change this to QtSyss
+*/
 const char *kDefaultVideosDir = "/home/defaultuser/Videos";
 }
 
@@ -36,6 +38,13 @@ Recorder::~Recorder()
 {
     if (s_instance == this)
         s_instance = nullptr;
+    /* Join any still-running worker BEFORE this object goes away: it captured
+     * `this`, so it must never observe a half-destroyed Recorder
+     */
+    if (m_startWorker.joinable())
+        m_startWorker.join();
+    if (m_stopWorker.joinable())
+        m_stopWorker.join();
 }
 
 Recorder *Recorder::instance()
@@ -46,8 +55,8 @@ Recorder *Recorder::instance()
 Recorder::Options Recorder::readOptions()
 {
     /* Settings are stored by the GUI via Nemo.Configuration (dconf) at
-     * /de/poetaster/tailwind and read here, as in
-     * screenrecorder /org/coderus/screenrecorder. */
+     * /de/poetaster/tailwind and read here
+     */
     MDConfGroup dconf(QStringLiteral("/de/poetaster/tailwind"));
     Options o;
     o.destination = dconf.value(QStringLiteral("destination"), QString::fromUtf8(kDefaultVideosDir)).toString();
@@ -114,17 +123,12 @@ bool Recorder::start()
             return false;
         }
         /* Re-read current settings from dconf so the GUI's latest values are
-         * authoritative at record time. The GUI (Nemo.Configuration) writes the
-         * selected audio sink to dconf, possibly *after* this lazily-activated
-         * daemon read it once at startup, and there is no SetAudioSink D-Bus call
-         * to push it -- so a stale/empty cached value would wrongly disable audio.
-         * The GUI is the settings source of truth and does not use the Set* methods. */
+         * authoritative at record time.
+         */
         m_options = readOptions();
         m_startInProgress = true;
     }
-    /* same naming convention as in screenrecorder
-    * and the same date format as jolla gallery
-    */
+
     const QString dateString = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
     QString path;
     int fps, bitrate, seconds, width, height;
@@ -150,10 +154,11 @@ bool Recorder::start()
                          << "audiosink=" << (sinkName.isEmpty() ? QStringLiteral("(none)") : QString::fromUtf8(sinkName));
 
     /* droidrec_start() can block, maybe, so don't run on the Qt
-     * event-loop thread:  * Run it on a detached worker;
-     * the status update + signals are emitted
-     * from that worker, Qt auto-queues them back to the main thread. */
-    std::thread([this, outPath, sinkName, fps, bitrate, seconds, width, height]() {
+     * event-loop thread: run it on a worker thread
+     */
+    if (m_startWorker.joinable())
+        m_startWorker.join();   /* destry finished worker is instant; the m_startInProgress guard makes a live one impossible here */
+    m_startWorker = std::thread([this, outPath, sinkName, fps, bitrate, seconds, width, height]() {
         DroidRecOptions opts;
         opts.out_path   = outPath.constData();
         opts.target_fps = fps;
@@ -176,7 +181,7 @@ bool Recorder::start()
             qWarning(logrecorder) << "droidrec_start failed:" << droidrec_last_error();
             setStatus(StatusReady);
         }
-    }).detach();
+    });
 
     return true;
 }
@@ -203,10 +208,13 @@ QString Recorder::stop()
 
     /* droidrec_stop() drains the encoder (up to ~2s) and pthread_joins the
      * codec/worker threads.
-     * Run it on a detached worker and report the
-     * finished file from that worker once cleanup is done. */
+     * Run it on a worker thread (owned by this object, joined in ~Recorder())
+     * and report the finished file from that worker once cleanup is done. */
 
-    std::thread([this, path]() {
+    if (m_stopWorker.joinable())
+        m_stopWorker.join();   /* reaping a finished worker is instant; the
+                                  m_stopInProgress guard makes a live one impossible here */
+    m_stopWorker = std::thread([this, path]() {
         const int rc = droidrec_stop();
         bool requestExit;
         {
@@ -226,7 +234,7 @@ QString Recorder::stop()
             qCDebug(logrecorder) << "stop() complete; requesting shutdown";
             emit shutdownRequested();
         }
-    }).detach();
+    });
 
     return path;
 }
@@ -258,11 +266,7 @@ void Recorder::handleShutDown()
         while (m_startInProgress || m_stopInProgress)
             m_opCond.wait(&m_mutex);
     }
-
     /* Also deliberately do NOT announce StatusIdle: the last meaningful
-     * broadcast already sent is StatusReady (from the stop worker). Leaving the
-     * GUI's state at Ready keeps its Record button armed, so the next
-     * Start re-activates the daemon via D-Bus/systemd instead of the button
-     * being disabled at state 0.
+     * broadcast already sent is StatusReady (from the stop worker).
     */
 }

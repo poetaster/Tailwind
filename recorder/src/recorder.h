@@ -19,6 +19,8 @@
 #include <QMutex>
 #include <QWaitCondition>
 
+#include <thread>
+
 class Recorder : public QObject
 {
     Q_OBJECT
@@ -93,6 +95,12 @@ private:
     bool    m_stopInProgress  = false;
     bool    m_shutdown        = false;
     QWaitCondition m_opCond;      /* signalled when a start/stop worker finishes */
+    /* Owned (NOT detached) workers, joined in ~Recorder(): a detached worker
+     * capturing `this` would outlive the app-owned Recorder if the process
+     * quit mid start/stop, and its first member access after the long
+     * droidrec_start()/droidrec_stop() call would be a use-after-free. */
+    std::thread m_startWorker;
+    std::thread m_stopWorker;
     Options m_options;
     /* persistent var backing droidrec's out_path, probably redundant */
     QString m_currentPath;
