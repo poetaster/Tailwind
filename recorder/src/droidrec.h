@@ -106,12 +106,8 @@ typedef struct AudioState {
     int              eof;            /* 1 = droidrec_audio_end(): no more PCM */
     volatile int     encode_error;   /* runtime encoder failure */
 
-    /* PCM source: the GUI appends raw S16LE interleaved PCM to the
-     * shared PCM file (pcm_path, set by droidrec_audio_begin()); a
-     * tailer thread (file_thread) reads it as it grows and pushes it
-     * into the s16_buf FIFO below. read() on a regular file never
-     * blocks, so the tailer polls with a short sleep between empty
-     * reads. */
+    /* PCM source: the GUI appends raw S16LE interleaved PCM to the */
+
     int              pcm_fd;         /* open()ed for reading, -1 = none */
     char             pcm_path[4096]; /* shared PCM file; set in droidrec_audio_begin */
     int              file_thread_started;
@@ -146,11 +142,8 @@ typedef struct AudioState {
  * (audiofeeder) writes it into the app's cache dir, and the D-Bus
  * adaptor resolves the same path from the dconf "tempdir" key the QML
  * publishes (StandardPaths.cache), passing it to
- * droidrec_audio_begin(). D-Bus stays argumentless (Nemo.DBus on
- * device rejects string-argument calls); the path is agreed via the
- * dconf key, not over the bus. The daemon removes the file once the
- * audio pipeline has drained (audio_stop). */
-
+ * droidrec_audio_begin().
+ */
 
 typedef struct Runner {
     struct wl_display *display;

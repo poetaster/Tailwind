@@ -159,12 +159,6 @@ void DBusAdaptor::Stop()
 
 int DBusAdaptor::StartAudio()
 {
-    /* The GUI (audiofeeder) writes its PCM into its own cache dir, and
-     * its QML publishes that same dir as the dconf "tempdir" key
-     * (StandardPaths.cache). Resolving it here lands on the same file
-     * without passing a string over D-Bus (Nemo.DBus on device rejects
-     * string-argument calls). The key was written by the GUI's
-     * Component.onCompleted, which is the only StartAudio caller. */
     const QString pcmPath = Recorder::readOptions().tempdir
                             + QStringLiteral("/tailwind_audio.pcm");
     qCDebug(logadaptor) << Q_FUNC_INFO << "pcm=" << pcmPath;

@@ -152,11 +152,7 @@ bool AudioFeeder::start(const QString &sinkName)
         return false;
     }
 
-    /* --- open the capture stream --- */
-    /* Exactly what the daemon's AAC encoder consumes: S16LE, 48 kHz,
-     * stereo. If the source's native rate differs, PulseAudio resamples
-     * server-side - parecord at 48 kHz proves that is clean on this
-     * device, which is the whole reason this class exists. */
+    /* open the capture stream --- */
     const pa_sample_spec spec = { PA_SAMPLE_S16LE, 48000, 2 };
     m_stream = pa_stream_new(m_context, "tailwind-capture", &spec, nullptr);
     if (!m_stream) {
@@ -235,9 +231,7 @@ QString AudioFeeder::output() const
     return m_outputPath;
 }
 
-/* ------------------------------------------------------------------ */
-/* GUI-thread helpers                                                  */
-/* ------------------------------------------------------------------ */
+/*  GUI-thread helpers */
 
 bool AudioFeeder::sourceExists(const QString &name)
 {
@@ -329,9 +323,7 @@ void AudioFeeder::failStart(const QString &err)
     }
 }
 
-/* ------------------------------------------------------------------ */
-/* Pulse callbacks (pa_threaded_mainloop thread)                       */
-/* ------------------------------------------------------------------ */
+/* Pulse callbacks (pa_threaded_mainloop thread) */
 
 void AudioFeeder::contextStateCallback(pa_context *c, void *userdata)
 {

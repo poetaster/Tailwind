@@ -69,9 +69,8 @@ public:
     /* Create/truncate the PCM file the daemon will tail; returns its
      * path, or an empty string on failure (see error()). dir is the
      * scratch dir (the app's cache dir; the daemon resolves the same
-     * one from the dconf "tempdir" key) - empty = our cache location.
-     * Call before start(); the daemon's StartAudio() (no args) opens
-     * the same path. */
+     * one from the dconf "tempdir" key) -
+      */
     Q_INVOKABLE QString prepare(const QString &dir);
 
     /* Begin capture. sinkName is "mic" for the microphone, or a Pulse

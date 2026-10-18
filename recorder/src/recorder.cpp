@@ -59,9 +59,7 @@ Recorder::Options Recorder::readOptions()
     MDConfGroup dconf(QStringLiteral("/de/poetaster/tailwind"));
     Options o;
     /* Both dirs are delivered by the GUI app (which runs as the primary user
-     * and therefore knows the right paths): record into its temp dir, land
-     * the finished file in its Movies dir. The QStandardPaths values are
-     * fallbacks only, for running the daemon standalone. */
+     * and therefore knows the right paths): */
     o.tempdir     = dconf.value(QStringLiteral("tempdir"),
                      QStandardPaths::writableLocation(QStandardPaths::TempLocation)).toString();
     o.destination = dconf.value(QStringLiteral("destination"),
@@ -146,8 +144,7 @@ bool Recorder::start()
     {
         QMutexLocker locker(&m_mutex);
         /* Record into the scratch dir, NOT the final destination: writing
-         * straight into ~/Videos makes the gallery glitch on a half-written
-         * file. The stop path moves the finished file into place. */
+         * straight into ~/Videos makes the gallery glitch */
         path = m_options.tempdir + QStringLiteral("/tailwind-%1.ts").arg(dateString);
         m_currentPath = path;
         fps     = m_options.fps;

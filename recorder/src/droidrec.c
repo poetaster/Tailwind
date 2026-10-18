@@ -739,11 +739,6 @@ void encoder_stop(Runner *runner) {
  * small FIFO; the audio thread (audio_thread) drains the FIFO in
  * 1024-sample chunks, encodes AAC (native encoder) and interleaves the
  * packets into the same MPEG-TS mux as the video stream.
- *
- * EOF contract: the GUI closes the file BEFORE calling EndAudio.
- * read() on a regular file never blocks, it returns whatever is there, so
- * the tailer polls with short sleeps; it exits once the file is drained
- * and eof is set, then calls droidrec_audio_end().
  */
 
 #define AUDIO_RATE 48000
