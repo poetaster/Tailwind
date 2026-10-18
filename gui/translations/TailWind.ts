@@ -82,5 +82,9 @@
         <source>Audio</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>Monitor</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 </TS>

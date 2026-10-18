@@ -65,6 +65,17 @@ signals:
     void statusChanged(int status);
     void recordingFinished(const QString &fileName);
 
+    /* Emitted once a Stop has fully completed (droidrec_stop() returned, the
+     * encoder is drained, the file is saved) AND this was a user-initiated
+     * Stop -- i.e. we are not already inside handleShutDown() from a SIGTERM
+     * or the D-Bus Quit() call, which own the teardown themselves.
+     *
+     * main() connects this to wind the daemon down and exit, so the process
+     * serves one recording and then goes away; the GUI re-activates it on the
+     * next Start (D-Bus/systemd). That keeps the daemon from holding stale or
+     * stuck state across recordings. */
+    void shutdownRequested();
+
 public slots:
     /* Initialises the backend on first use; safe to call repeatedly. */
     void init();

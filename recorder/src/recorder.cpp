@@ -208,9 +208,15 @@ QString Recorder::stop()
 
     std::thread([this, path]() {
         const int rc = droidrec_stop();
+        bool requestExit;
         {
             QMutexLocker locker(&m_mutex);
             m_stopInProgress = false;
+            /* Only a user Stop should trigger an exit. If a SIGTERM/Quit
+             * already drove us into handleShutDown(), that path owns the
+             * teardown (it calls handleShutDown() + qApp->quit() itself), so
+             * don't emit the shutdown alert again. */
+            requestExit = !m_shutdown;
         }
         m_opCond.wakeAll();
 
@@ -220,6 +226,10 @@ QString Recorder::stop()
         setStatus(StatusReady);
         qCDebug(logrecorder) << "Recording saved to" << path;
         emit recordingFinished(path);
+        if (requestExit) {
+            qCDebug(logrecorder) << "stop() complete; requesting shutdown";
+            emit shutdownRequested();
+        }
     }).detach();
 
     return path;
@@ -249,5 +259,11 @@ void Recorder::handleShutDown()
     }
 
     droidrec_shutdown();
-    setStatus(StatusIdle);
+    /* Deliberately do NOT announce StatusIdle here: every caller of
+     * handleShutDown() exits the process immediately after, so "alive but
+     * idle" is never a real end state. The last meaningful broadcast already
+     * sent is StatusReady (from the stop worker). Leaving the GUI's cached
+     * state at Ready keeps its Record button armed, so the next Start call
+     * re-activates the daemon via D-Bus/systemd instead of the button being
+     * disabled at state 0. */
 }

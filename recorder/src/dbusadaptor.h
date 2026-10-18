@@ -29,13 +29,10 @@ public slots:
     /* Audio: the GUI captures microphone PCM (S16LE/stereo/48 kHz) with
      * QAudioInput and appends it to the shared file
      * /home/defaultuser/Videos/tailwind_audio.pcm, which it prepares BEFORE calling
-     * BeginAudio; the daemon tails that file into the AAC encoder (see
-     * GetAudioRate/GetAudioChannels for the format it expects).
-     * The path is a fixed convention, NOT an argument: Nemo.DBus on the
-     * device rejects the string-argument call ("Invalid type"), and the
-     * no-argument calls are the proven-working pattern. */
-    int BeginAudio();
-    void EndAudio();
+     * BeginAudio; the daemon tails that file into the AAC encoder
+   */
+    int StartAudio();
+    void StopAudio();
     int GetAudioRate() const;
     int GetAudioChannels() const;
 

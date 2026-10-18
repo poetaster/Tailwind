@@ -8,12 +8,60 @@ import QtMultimedia 5.6
 Page {
     id: page
     property bool startedFromToggle:false
-    property bool audioArmed:false   /* sink selected; start feed when state==2 */
-    /* BeginAudio succeeded on the daemon and EndAudio has not been sent
-     * yet. Independent of audioFeeder.running: if the capture dies
-     * mid-recording the daemon still has the audio pipeline open and
-     * MUST get EndAudio, or droidrec_stop() hangs on the audio thread. */
+    property bool audioArmed:false
     property bool daemonAudio:false
+    property bool debug:true
+
+    /* Begin the audio pipeline: prepare the PCM file, ask the daemon to
+     * start its audio path, then start the capture. The page owns this
+     * orchestration because it has to coordinate audioFeeder, streamFilter
+     * and the daemon call together; dbus is only the transport. */
+    function startAudioFeed() {
+        var pcmPath = audioFeeder.prepare()
+        if (pcmPath === "") {
+            if (debug) console.warn("audio: prepare() failed:", audioFeeder.error)
+            return
+        }
+
+        if (debug) console.log("audio: PCM file prepared at", pcmPath, "source:", conf.audiosink)
+
+        /* No arguments: the daemon opens the same fixed path
+         * (/home/defaultuser/Videos/tailwind_audio.pcm) by convention. */
+        dbus.typedCall("StartAudio", [], function(rc) {
+            if (rc !== 0) {
+                if (debug) console.warn("StartAudio rejected (rc", rc + "): video-only recording")
+                audioFeeder.stop()   /* close the prepared PCM file */
+                return
+            }
+            daemonAudio = true
+            // mute the mic/sidetone playback streams BEFORE the capture starts,
+            var filterOk = (streamFilter && streamFilter.start())
+            if (!audioFeeder.start(conf.audiosink)) {
+                if (debug) console.warn("audio capture failed to start:", audioFeeder.error)
+                endDaemonAudio()
+                if (streamFilter && streamFilter.active)
+                    streamFilter.stop()
+                return
+            }
+            if (!filterOk)
+                if (debug) console.warn("stream filter unavailable; mic may leak into the recording")
+        }, function(err) {
+            console.warn("StartAudio call failed:", err)
+            audioFeeder.stop()   /* close the prepared PCM file */
+        })
+    }
+
+    /* close the daemon's audio pipeline exactly once, whether or not
+     * the capture is still alive: the daemon's Stop path waits for
+     * StopAudio before it can flush and finish. Order matters */
+
+    function endDaemonAudio() {
+        if (!daemonAudio)
+            return
+        daemonAudio = false
+        audioFeeder.stop()
+        dbus.call("StopAudio")
+    }
 
     MediaPlayer {
         id: tickPlayer
@@ -78,73 +126,19 @@ Page {
             if (repeatedGetState.running) {
                 repeatedGetState.stop()
             }
-            if (newState == 2 && audioArmed) {
+            if (newState === 2 && audioArmed) {
                 audioArmed = false
-                startAudioFeed()
-            } else if (newState != 2) {
+                page.startAudioFeed()
+            } else if (newState !== 2) {
                 /* the recording is ending (normal stop, top menu, or the
                  * daemon stopped itself): never let the capture or the
                  * stream filter outlive it, and always close the daemon's
                  * audio pipeline if it was opened */
-                endDaemonAudio()
+                page.endDaemonAudio()
                 if (streamFilter && streamFilter.active) {
                     streamFilter.stop()
                 }
             }
-        }
-
-        function startAudioFeed() {
-            var pcmPath = audioFeeder.prepare()
-            if (pcmPath === "") {
-                console.warn("audio: prepare() failed:", audioFeeder.error)
-                return
-            }
-            console.log("audio: PCM file prepared at", pcmPath,
-                        "source:", conf.audiosink)
-            /* No arguments: the daemon opens the same fixed path
-             * (/home/defaultuser/Videos/tailwind_audio.pcm) by convention.
-             * Passing the path
-             * as a typed argument is what Nemo.DBus rejects on device
-             * with "Invalid type"; no-argument calls are the
-             * proven-working pattern (Start, Stop, EndAudio, GetState). */
-            dbus.typedCall("BeginAudio", [], function(rc) {
-                if (rc != 0) {
-                    console.warn("BeginAudio rejected (rc", rc + "): video-only recording")
-                    audioFeeder.stop()   /* close the prepared PCM file */
-                    return
-                }
-                daemonAudio = true
-                /* mute the mic/sidetone playback streams BEFORE the
-                 * capture starts, so microphone audio can't leak into
-                 * the recording (Sail-Recorder's proven approach) */
-                var filterOk = (streamFilter && streamFilter.start())
-                if (!audioFeeder.start(conf.audiosink)) {
-                    console.warn("audio capture failed to start:", audioFeeder.error)
-                    endDaemonAudio()
-                    if (streamFilter && streamFilter.active)
-                        streamFilter.stop()
-                    return
-                }
-                if (!filterOk)
-                    console.warn("stream filter unavailable; mic may leak into the recording")
-            }, function(err) {
-                console.warn("BeginAudio call failed:", err)
-                audioFeeder.stop()   /* close the prepared PCM file */
-            })
-        }
-
-        /* close the daemon's audio pipeline exactly once, whether or not
-         * the capture is still alive: the daemon's Stop path waits for
-         * EndAudio before it can flush and finish.
-         * Ordering matters: audioFeeder.stop() closes (flushes) the PCM
-         * file FIRST, so the daemon's tailer sees the end of file before
-         * EndAudio tells it to drain. */
-        function endDaemonAudio() {
-            if (!daemonAudio)
-                return
-            daemonAudio = false
-            audioFeeder.stop()
-            dbus.call("EndAudio")
         }
 
         function recordingFinished(filename) {
@@ -178,15 +172,11 @@ Page {
 
     ListModel {
         id: audioSinkModel
-        /* capture sources: "mic" = direct microphone (source.primary_input,
-         * verified clean on the device); "" = video only. The Pulse
-         * sink-monitor (loopback) path is not offered: the droid-HAL
-         * monitor tap is voice-processed and sounds distorted on the
-         * device, whatever sink is chosen. */
         Component.onCompleted: {
             clear();
-            append({ name: "",    label: qsTr("No audio") });
-            append({ name: "mic", label: qsTr("Microphone") });
+            append({ name: "",                    label: qsTr("No audio") });
+            append({ name: "mic",                 label: qsTr("Microphone") });
+            append({ name: "sink.primary_output", label: qsTr("Monitor") });
             /* restore the saved selection */
             var sel = 0;
             for (var j = 0; j < audioSinkModel.count; j++) {
@@ -310,13 +300,8 @@ Page {
                         delayTimer.running = true
                         tickTimer.running = true
                     } else if (serviceState == 2) {
-                        console.log("stop called from button or top menu")
-                        /* tell the daemon the stream is done (even if the
-                         * capture already died); Stop() then drains the
-                         * FIFO and flushes the AAC. dbus.*: endDaemonAudio
-                         * is a member of the DBusInterface object, not a
-                         * global function (QML scopes are per-object). */
-                        dbus.endDaemonAudio()
+                        if (debug) console.log("stop called from button or top menu")
+                        page.endDaemonAudio()
                         /* release every sink input the filter muted */
                         if (streamFilter && streamFilter.active) {
                             streamFilter.stop()

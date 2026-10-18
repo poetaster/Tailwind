@@ -157,7 +157,7 @@ void DBusAdaptor::Stop()
         Recorder::instance()->stop();
 }
 
-int DBusAdaptor::BeginAudio()
+int DBusAdaptor::StartAudio()
 {
     qCDebug(logadaptor) << Q_FUNC_INFO << "pcm=" << TAILWIND_AUDIO_PCM_PATH;
     const int rc = droidrec_audio_begin();
@@ -166,7 +166,7 @@ int DBusAdaptor::BeginAudio()
     return rc;
 }
 
-void DBusAdaptor::EndAudio()
+void DBusAdaptor::StopAudio()
 {
     qCDebug(logadaptor) << Q_FUNC_INFO;
     droidrec_audio_end();
