@@ -15,10 +15,13 @@
  * a local file is just a write(2) and keeps up at ~200 KB/s with headroom.
  *
  * Contract with the daemon:
- *  - prepare() creates/truncates the PCM file and returns its path;
- *  - the QML calls the daemon's BeginAudio() (no arguments - the path
- *    is a fixed convention both sides agree on, nothing crosses D-Bus)
- *    and then calls start();
+ *  - prepare(dir) creates/truncates the PCM file in dir and returns
+ *    its path;
+ *  - the QML calls the daemon's StartAudio() (no arguments - the path
+ *    is derived on both sides: here from the dir the QML passes, on
+ *    the daemon from the dconf "tempdir" key the QML publishes; the
+ *    two are the same dir, so nothing crosses D-Bus) and then calls
+ *    start();
  *  - stop() closes the file (flushing) BEFORE the QML sends EndAudio, so
  *    the daemon's tailer sees a clean end of file. stop() blocks until
  *    the capture thread has fully wound down, so that ordering holds.
@@ -64,10 +67,12 @@ public:
     ~AudioFeeder() override;
 
     /* Create/truncate the PCM file the daemon will tail; returns its
-     * path, or an empty string on failure (see error()). Call before
-     * start(); the daemon's BeginAudio() (no args) opens the same
-     * fixed path by convention. */
-    Q_INVOKABLE QString prepare();
+     * path, or an empty string on failure (see error()). dir is the
+     * scratch dir (the app's cache dir; the daemon resolves the same
+     * one from the dconf "tempdir" key) - empty = our cache location.
+     * Call before start(); the daemon's StartAudio() (no args) opens
+     * the same path. */
+    Q_INVOKABLE QString prepare(const QString &dir);
 
     /* Begin capture. sinkName is "mic" for the microphone, or a Pulse
      * sink name to monitor (name + ".monitor"). Blocks until the stream

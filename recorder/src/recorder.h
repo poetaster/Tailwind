@@ -26,7 +26,8 @@ class Recorder : public QObject
     Q_OBJECT
 public:
     struct Options {
-        QString destination; /* full output path (MPEG-TS under the Videos dir) */
+        QString tempdir;     /* scratch dir the recording is written into while capturing */
+        QString destination; /* final dir the finished file is moved to on stop (~/Videos) */
         int     fps;         /* 0 = backend default (24) */
         int     bitrate;     /* bits per second, 0 = backend default */
         int     seconds;     /* 0 = record until stop() is called */
@@ -55,7 +56,8 @@ public:
     void    setOptions(const Options &options);
 
     /* Sensible defaults: native resolution, 24 fps, backend-default bitrate,
-     * record to the Videos directory until explicitly stopped. */
+     * record into the temp dir until stopped, then move to the destination
+     * (~/Videos) so the gallery never sees a half-written file. */
     static Options readOptions();
 
 signals:

@@ -26,11 +26,13 @@ public slots:
     void Start();
     Q_NOREPLY void Stop();
 
-    /* Audio: the GUI captures microphone PCM (S16LE/stereo/48 kHz) with
-     * QAudioInput and appends it to the shared file
-     * /home/defaultuser/Videos/tailwind_audio.pcm, which it prepares BEFORE calling
-     * BeginAudio; the daemon tails that file into the AAC encoder
-   */
+    /* Audio: the GUI captures microphone/media PCM (S16LE/stereo/48 kHz)
+     * and appends it to a shared file in the app's cache dir, which it
+     * prepares BEFORE calling StartAudio; this slot resolves the same
+     * path from the dconf "tempdir" key and hands it to
+     * droidrec_audio_begin(), which tails the file into the AAC encoder.
+     * Stays argumentless: Nemo.DBus on device rejects string-argument
+     * calls. */
     int StartAudio();
     void StopAudio();
     int GetAudioRate() const;

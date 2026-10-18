@@ -106,12 +106,14 @@ typedef struct AudioState {
     int              eof;            /* 1 = droidrec_audio_end(): no more PCM */
     volatile int     encode_error;   /* runtime encoder failure */
 
-    /* PCM source: the GUI appends raw S16LE interleaved PCM to
-     * TAILWIND_AUDIO_PCM_PATH; a tailer thread (file_thread) reads it as
-     * it grows and pushes it into the s16_buf FIFO below. read() on a
-     * regular file never blocks, so the tailer polls with a short sleep
-     * between empty reads. */
+    /* PCM source: the GUI appends raw S16LE interleaved PCM to the
+     * shared PCM file (pcm_path, set by droidrec_audio_begin()); a
+     * tailer thread (file_thread) reads it as it grows and pushes it
+     * into the s16_buf FIFO below. read() on a regular file never
+     * blocks, so the tailer polls with a short sleep between empty
+     * reads. */
     int              pcm_fd;         /* open()ed for reading, -1 = none */
+    char             pcm_path[4096]; /* shared PCM file; set in droidrec_audio_begin */
     int              file_thread_started;
     pthread_t        file_thread;
 
@@ -140,13 +142,14 @@ typedef struct AudioState {
 
 #define AAC_FRAME_SAMPLES 1024
 
-/* The shared PCM file, agreed with the GUI by convention (NOT passed
- * over D-Bus): the GUI captures S16LE/stereo/48 kHz with QAudioInput
- * and appends it here; the daemon tails it. It lives next to the
- * video output, which both sides can reach for sure (/tmp writes
- * failed silently on device); the daemon removes it once the audio
- * pipeline has drained (audio_stop). */
-#define TAILWIND_AUDIO_PCM_PATH "/home/defaultuser/Videos/tailwind_audio.pcm"
+/* The shared PCM file is not a compile-time constant: the GUI
+ * (audiofeeder) writes it into the app's cache dir, and the D-Bus
+ * adaptor resolves the same path from the dconf "tempdir" key the QML
+ * publishes (StandardPaths.cache), passing it to
+ * droidrec_audio_begin(). D-Bus stays argumentless (Nemo.DBus on
+ * device rejects string-argument calls); the path is agreed via the
+ * dconf key, not over the bus. The daemon removes the file once the
+ * audio pipeline has drained (audio_stop). */
 
 
 typedef struct Runner {
@@ -256,12 +259,13 @@ void audio_stop(Runner *app);      /* join thread, flush encoder, free resources
 
 /* Audio feed API (called from the D-Bus adaptor) */
 int  droidrec_audio_active(void);  /* 1 = audio stream registered, accepting PCM */
-int  droidrec_audio_begin(void);
-    /* 0 = audio enabled: opens TAILWIND_AUDIO_PCM_PATH (created by the
-     * GUI, which calls BeginAudio only after preparing it) for reading
-     * and starts the tailer thread that feeds the encoder FIFO from it.
-     * The path is a fixed convention, not an argument: Nemo.DBus on the
-     * device rejects the string-argument call with "Invalid type". */
+int  droidrec_audio_begin(const char *pcm_path);
+    /* 0 = audio enabled: opens pcm_path (created by the GUI, which
+     * calls BeginAudio only after preparing it) for reading and starts
+     * the tailer thread that feeds the encoder FIFO from it. The
+     * adaptor passes the app-cache-dir path resolved from the dconf
+     * "tempdir" key; D-Bus itself stays argumentless (Nemo.DBus on
+     * device rejects the string-argument call with "Invalid type"). */
 int  droidrec_audio_feed(const int16_t *pcm, int samples); /* push S16LE interleaved samples */
 void droidrec_audio_end(void);     /* no more PCM; audio thread drains and exits */
 int  droidrec_audio_rate(void);    /* expected sample rate (48000) */

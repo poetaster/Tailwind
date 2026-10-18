@@ -12,12 +12,19 @@ Page {
     property bool daemonAudio:false
     property bool debug:true
 
+    /* Page.active propagates from the window's active state, so this fires
+     * when the app regains focus: re-sync the audio combo in case the
+     * settings toggle changed the sink while we were backgrounded. */
+    onActiveFocusChanged: {
+        if (page.status === PageStatus.Active) audioSinkCombo.syncFromSettings()
+    }
+
     /* Begin the audio pipeline: prepare the PCM file, ask the daemon to
      * start its audio path, then start the capture. The page owns this
      * orchestration because it has to coordinate audioFeeder, streamFilter
      * and the daemon call together; dbus is only the transport. */
     function startAudioFeed() {
-        var pcmPath = audioFeeder.prepare()
+        var pcmPath = audioFeeder.prepare(conf.tempdir)
         if (pcmPath === "") {
             if (debug) console.warn("audio: prepare() failed:", audioFeeder.error)
             return
@@ -25,8 +32,9 @@ Page {
 
         if (debug) console.log("audio: PCM file prepared at", pcmPath, "source:", conf.audiosink)
 
-        /* No arguments: the daemon opens the same fixed path
-         * (/home/defaultuser/Videos/tailwind_audio.pcm) by convention. */
+        /* No arguments: the daemon resolves the same PCM path itself
+         * (the app's cache dir, from the dconf "tempdir" key) and opens
+         * it. Nemo.DBus on device rejects string-argument calls. */
         dbus.typedCall("StartAudio", [], function(rc) {
             if (rc !== 0) {
                 if (debug) console.warn("StartAudio rejected (rc", rc + "): video-only recording")
@@ -168,6 +176,8 @@ Page {
         property int scale: 1
         property int startdelay: 0
         property string audiosink: ""   /* pulse sink name; empty = video only */
+        property string tempdir: ""     /* where the daemon records while capturing */
+        property string destination: "" /* where the finished file lands (~/Videos) */
     }
 
     ListModel {
@@ -344,12 +354,15 @@ Page {
                 actionButton.trigger()
             }
         }
-        onActiveChanged: {
-            if (appWindow.active)
-                audioSinkCombo.syncFromSettings()
-        }
     }
     Component.onCompleted: {
+        /* Deliver this app's own paths to the daemon: it runs as a different
+         * user whose StandardPaths point elsewhere, so it uses whatever the
+         * app stores here — record into the cache dir, land the finished
+         * file in the Movies dir. Idempotent (writing an unchanged value
+         * makes no dconf change), so this effectively happens once. */
+        conf.tempdir = StandardPaths.cache
+        conf.destination = StandardPaths.videos
         dbus.typedCall("GetState", [], function(initialState) {
             serviceState = initialState
             delayTimer.interval = conf.startdelay * 1000

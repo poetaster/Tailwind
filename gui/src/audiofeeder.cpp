@@ -3,6 +3,9 @@
 #include <pulse/pulseaudio.h>
 #include <pulse/thread-mainloop.h>
 
+#include <QDir>
+#include <QFileInfo>
+#include <QStandardPaths>
 #include <QDebug>
 
 #include <cerrno>
@@ -12,10 +15,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-/* The fixed PCM path shared with the daemon. MUST match
- * TAILWIND_AUDIO_PCM_PATH in recorder/src/droidrec.h - both sides agree
- * on it by convention; nothing crosses D-Bus. */
-static const char kPcmPath[] = "/home/defaultuser/Videos/tailwind_audio.pcm";
+/* The shared PCM file lives in the scratch dir the QML passes to
+ * prepare() (the app's cache dir, published as the dconf "tempdir" */
+static const char kPcmFileName[] = "tailwind_audio.pcm";
 
 static const int kConnectTimeoutMs = 5000;
 static const int kQueryTimeoutMs = 3000;
@@ -34,20 +36,31 @@ AudioFeeder::~AudioFeeder()
     windDown();   /* defensive: release any pulse objects we failed to clean */
 }
 
-QString AudioFeeder::prepare()
+QString AudioFeeder::prepare(const QString &dir)
 {
     if (m_fd >= 0)
         close(m_fd);
 
-    m_fd = open(kPcmPath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    /* dir comes from the QML (conf.tempdir, i.e. the app's cache dir);
+     * fall back to our own cache location if none is given. */
+    QString base = dir.trimmed();
+    if (base.isEmpty())
+        base = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+    const QString path = base + QLatin1String("/") + QLatin1String(kPcmFileName);
+    if (!QDir().mkpath(QFileInfo(path).path())) {
+        m_error = QStringLiteral("cannot create directory for %1").arg(path);
+        emit errorChanged();
+        return QString();
+    }
+    const QByteArray pathUtf8 = path.toUtf8();
+    m_fd = open(pathUtf8.constData(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (m_fd < 0) {
-        m_error = QString("open(%1) failed: %2")
-                      .arg(QString::fromLatin1(kPcmPath), strerror(errno));
+        m_error = QString("open(%1) failed: %2").arg(path, strerror(errno));
         emit errorChanged();
         return QString();
     }
 
-    m_outputPath = QString::fromLatin1(kPcmPath);
+    m_outputPath = path;
     m_error.clear();
     m_bytes = 0;
     m_emitFloor = 0;

@@ -6,6 +6,10 @@
 #include "droidrec.h"
 
 #include <QDateTime>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QStandardPaths>
 #include <QDebug>
 #include <QLoggingCategory>
 #include <QMutexLocker>
@@ -18,12 +22,6 @@ Q_LOGGING_CATEGORY(logrecorder, "tailwind.recorder", QtDebugMsg)
 
 namespace {
 Recorder *s_instance = nullptr;
-
-/* Default output directory. On Sailfish the recording daemon runs with access
- * to the primary user's home; the original droidrec used this path too.
- * change this to QtSyss
-*/
-const char *kDefaultVideosDir = "/home/defaultuser/Videos";
 }
 
 Recorder::Recorder(QObject *parent)
@@ -31,7 +29,8 @@ Recorder::Recorder(QObject *parent)
 {
     m_options = readOptions();
     s_instance = this;
-    qCDebug(logrecorder) << "Recorder created, destination dir:" << m_options.destination;
+    qCDebug(logrecorder) << "Recorder created, scratch dir:" << m_options.tempdir
+                         << "destination dir:" << m_options.destination;
 }
 
 Recorder::~Recorder()
@@ -59,7 +58,14 @@ Recorder::Options Recorder::readOptions()
      */
     MDConfGroup dconf(QStringLiteral("/de/poetaster/tailwind"));
     Options o;
-    o.destination = dconf.value(QStringLiteral("destination"), QString::fromUtf8(kDefaultVideosDir)).toString();
+    /* Both dirs are delivered by the GUI app (which runs as the primary user
+     * and therefore knows the right paths): record into its temp dir, land
+     * the finished file in its Movies dir. The QStandardPaths values are
+     * fallbacks only, for running the daemon standalone. */
+    o.tempdir     = dconf.value(QStringLiteral("tempdir"),
+                     QStandardPaths::writableLocation(QStandardPaths::TempLocation)).toString();
+    o.destination = dconf.value(QStringLiteral("destination"),
+                     QStandardPaths::writableLocation(QStandardPaths::MoviesLocation)).toString();
     o.fps     = dconf.value(QStringLiteral("fps"), 24).toInt();
     o.bitrate = dconf.value(QStringLiteral("bitrate"), 24).toInt() * 1000000; /* Mbit/s -> bits/sec */
     o.seconds = dconf.value(QStringLiteral("seconds"), 0).toInt();            /* 0 = record until stop() */
@@ -126,6 +132,10 @@ bool Recorder::start()
          * authoritative at record time.
          */
         m_options = readOptions();
+        if (!QDir().mkpath(m_options.tempdir)) {
+            qWarning(logrecorder) << "Recording (scratch) directory unavailable:" << m_options.tempdir;
+            return false;
+        }
         m_startInProgress = true;
     }
 
@@ -135,7 +145,10 @@ bool Recorder::start()
     QString audioSink;
     {
         QMutexLocker locker(&m_mutex);
-        path = m_options.destination + QStringLiteral("/tailwind-%1.ts").arg(dateString);
+        /* Record into the scratch dir, NOT the final destination: writing
+         * straight into ~/Videos makes the gallery glitch on a half-written
+         * file. The stop path moves the finished file into place. */
+        path = m_options.tempdir + QStringLiteral("/tailwind-%1.ts").arg(dateString);
         m_currentPath = path;
         fps     = m_options.fps;
         bitrate = m_options.bitrate;
@@ -217,19 +230,44 @@ QString Recorder::stop()
     m_stopWorker = std::thread([this, path]() {
         const int rc = droidrec_stop();
         bool requestExit;
+        QString scratchDir, destDir;
         {
             QMutexLocker locker(&m_mutex);
             m_stopInProgress = false;
             requestExit = !m_shutdown;
+            scratchDir = m_options.tempdir;
+            destDir    = m_options.destination;
         }
         m_opCond.wakeAll();
 
         if (rc != 0) {
             qWarning(logrecorder) << "droidrec_stop reported:" << droidrec_last_error();
         }
+
+        /* Move the finished file out of the scratch dir into its final
+         * destination (the app's ~/Videos). The gallery never saw the
+         * half-written file; now it sees one complete file appear.
+         * rename() first, copy+remove as the cross-device fallback
+         * (tmpfs scratch, disk-backed home). */
+        QString finalPath = path;
+        if (!destDir.isEmpty() && destDir != scratchDir) {
+            const QString target = destDir + QLatin1Char('/') + QFileInfo(path).fileName();
+            if (QDir().mkpath(destDir) && QFile::rename(path, target)) {
+                finalPath = target;
+            } else if (QFile::copy(path, target)) {
+                finalPath = target;
+                if (!QFile::remove(path))
+                    qWarning(logrecorder) << "Moved copy of" << path << "to" << target
+                                         << "but the scratch copy could not be removed";
+            } else {
+                qWarning(logrecorder) << "Cannot move recording to" << destDir
+                                     << "- leaving it at" << path;
+            }
+        }
+
         setStatus(StatusReady);
-        qCDebug(logrecorder) << "Recording saved to" << path;
-        emit recordingFinished(path);
+        qCDebug(logrecorder) << "Recording saved to" << finalPath;
+        emit recordingFinished(finalPath);
         if (requestExit) {
             qCDebug(logrecorder) << "stop() complete; requesting shutdown";
             emit shutdownRequested();

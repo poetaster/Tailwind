@@ -1126,11 +1126,13 @@ void audio_stop(Runner *runner) {
     /* the audio pipeline is fully drained and flushed into the mux:
      * remove the shared PCM file now,
      */
-    if (unlink(TAILWIND_AUDIO_PCM_PATH) == 0)
-        printf("AUDIO pcm file removed: %s\n", TAILWIND_AUDIO_PCM_PATH);
-    else if (errno != ENOENT)
-        fprintf(stderr, "AUDIO cannot remove %s: %s\n",
-                TAILWIND_AUDIO_PCM_PATH, strerror(errno));
+    if (a->pcm_path[0] != '\0') {
+        if (unlink(a->pcm_path) == 0)
+            printf("AUDIO pcm file removed: %s\n", a->pcm_path);
+        else if (errno != ENOENT)
+            fprintf(stderr, "AUDIO cannot remove %s: %s\n",
+                    a->pcm_path, strerror(errno));
+    }
 
     /* keep counters for print_result(); release the resources */
     audio_free_audio(runner);
@@ -1183,9 +1185,13 @@ void *audio_file_thread(void *arg) {
     return NULL;
 }
 
-int droidrec_audio_begin(void) {
+int droidrec_audio_begin(const char *pcm_path) {
     if (!s_runner) {
         set_error("droidrec_audio_begin: no recorder instance");
+        return -1;
+    }
+    if (!pcm_path || pcm_path[0] == '\0') {
+        set_error("droidrec_audio_begin: no PCM path given");
         return -1;
     }
     /* droidrec_start() runs on a worker thread and may not have registered
@@ -1208,11 +1214,17 @@ int droidrec_audio_begin(void) {
         return -1;
     }
 
+    /* The GUI (audiofeeder) writes the PCM into its own cache dir;
+     * the adaptor resolved this same path from the dconf "tempdir"
+     * key. Remember it here: audio_stop() unlinks it once the
+     * pipeline has drained. */
+    snprintf(a->pcm_path, sizeof(a->pcm_path), "%s", pcm_path);
+
     /* The GUI creates (and truncates) the file before calling BeginAudio,
      * but be tolerant of a small race: retry for a couple of seconds. */
     int fd = -1;
     for (int i = 0; i < 20; i++) {
-        fd = open(TAILWIND_AUDIO_PCM_PATH, O_RDONLY);
+        fd = open(a->pcm_path, O_RDONLY);
         if (fd >= 0)
             break;
         if (errno != ENOENT) break;
@@ -1232,7 +1244,7 @@ int droidrec_audio_begin(void) {
         return -1;
     }
     a->file_thread_started = 1;
-    printf("AUDIO begin: tailing %s\n", TAILWIND_AUDIO_PCM_PATH);
+    printf("AUDIO begin: tailing %s\n", a->pcm_path);
     set_error("ok");
     return 0;
 }
