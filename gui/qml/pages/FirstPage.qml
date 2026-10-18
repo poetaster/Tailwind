@@ -254,6 +254,18 @@ Page {
                         conf.audiosink = ""
                     }
                 }
+                /* Re-sync the display if the setting was changed elsewhere
+                 * (e.g. the settings toggle forces "No audio") while the
+                 * app was in the background. */
+                function syncFromSettings() {
+                    for (var j = 0; j < audioSinkModel.count; j++) {
+                        if (audioSinkModel.get(j).name === conf.audiosink) {
+                            if (currentIndex !== j)
+                                currentIndex = j
+                            break
+                        }
+                    }
+                }
                 menu: ContextMenu {
                     Repeater {
                         model: audioSinkModel
@@ -331,6 +343,10 @@ Page {
             if (actionButton.enabled) {
                 actionButton.trigger()
             }
+        }
+        onActiveChanged: {
+            if (appWindow.active)
+                audioSinkCombo.syncFromSettings()
         }
     }
     Component.onCompleted: {

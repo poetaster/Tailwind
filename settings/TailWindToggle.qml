@@ -1,6 +1,7 @@
 import QtQuick 2.1
 import Sailfish.Silica 1.0
 import Nemo.DBus 2.0
+import Nemo.Configuration 1.0
 import com.jolla.settings 1.0
 import com.jolla.settings.system 1.0
 import Nemo.Notifications 1.0
@@ -13,6 +14,14 @@ SettingsToggle {
     property int serviceState: 0
     property bool startedFromToggle: false
     property bool requestInFlight: false
+
+    /* Same dconf store the GUI app writes to; the toggle only needs
+     * the audio gate (audiosink). */
+    ConfigurationGroup {
+        id: conf
+        path: "/de/poetaster/tailwind"
+        property string audiosink: ""   /* "" = video only */
+    }
 
     Timer {
         id: inFlightTimer
@@ -63,6 +72,14 @@ SettingsToggle {
         requestInFlight = true
         inFlightTimer.start()
         startedFromToggle = true
+        /* This path never involves the GUI's audio capture pipeline, so
+         * the recording must be video-only: clear the sink setting before
+         * Start. The daemon re-reads dconf on every Start, and an empty
+         * value means no AAC track is prepared (a prepared-but-never-fed
+         * AAC track is what produced the unplayable files). The dconf
+         * write completes before the Start message is dispatched, so the
+         * daemon always sees it. */
+        conf.audiosink = ""
         dbus.call("Start")
     }
 
