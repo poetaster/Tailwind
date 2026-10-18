@@ -110,8 +110,8 @@ int main(int argc, char *argv[])
         qCDebug(logmain) << "Running as D-Bus daemon (de.poetaster.tailwind)";
         setShutDownSignal(SIGINT);   /* Ctrl-C */
         setShutDownSignal(SIGTERM);  /* systemctl stop / kill */
-        /* One-recording-per-process: once a Stop has fully completed, wind
-         * the backend down (handleShutDown -> droidrec_shutdown) and exit.
+        /* One-recording-per-process: once a Stop has fully completed, finalise
+         * the file (already done by the stop worker's droidrec_stop) and exit.
          * The GUI re-activates the daemon on the next Start (D-Bus/systemd).
          * This keeps the daemon from holding stuck state across recordings.
          * The quit is deferred by one tick so the in-flight D-Bus signals
