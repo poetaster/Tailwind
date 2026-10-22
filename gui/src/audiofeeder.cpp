@@ -133,7 +133,8 @@ bool AudioFeeder::start(const QString &sinkName)
      * anything else is treated as a PulseAudio sink to monitor. */
     QStringList candidates;
     if (sinkName == QLatin1String("mic")) {
-        candidates << QStringLiteral("source.primary_input")
+        //candidates << QStringLiteral("source.primary_input")
+        candidates << QStringLiteral("sink.deep_buffer.monitor")
                    << QStringLiteral("default");
     } else {
         candidates << (sinkName + QStringLiteral(".monitor")) << sinkName;
