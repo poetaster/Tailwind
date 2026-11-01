@@ -9,4 +9,9 @@ Most of the application originated in @coderus screenrecorder, a fork of which I
 
 The lipstick recorder -> avutil pipeline backend (droidrec.c) is derived in large part from https://github.com/909dokuz/Sail-Recorder/main/src/sfrec_audio_v2.c
 
+You can attempt installing with harpoon if you don't want to just download the rpms from the releases :) Though, you can just download the rpm from the releases :)
+
+[![Add to Harpoon](add-to-harpoon.png)](https://github.com/JuhaniLehtimaeki/Harpoon)
+
+
 <a href="https://www.flaticon.com/free-icons/wind-turbine" title="wind turbine icons">Wind turbine icons created by Rahul Kaklotar - Flaticon</a>

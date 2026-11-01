@@ -95,7 +95,7 @@
             <arg name="width" type="int" description="width of the frame, in pixels"/>
             <arg name="height" type="int" description="height of the frame, in pixels"/>
             <arg name="stride" type="int" description="stride of the frame"/>
-            <arg name="format" type="int" desciption="format of the frame"/>
+            <arg name="format" type="int" description="format of the frame"/>
         </event>
 
         <event name="frame">
