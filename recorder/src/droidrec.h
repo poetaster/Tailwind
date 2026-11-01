@@ -255,10 +255,8 @@ int  droidrec_audio_active(void);  /* 1 = audio stream registered, accepting PCM
 int  droidrec_audio_begin(const char *pcm_path);
     /* 0 = audio enabled: opens pcm_path (created by the GUI, which
      * calls BeginAudio only after preparing it) for reading and starts
-     * the tailer thread that feeds the encoder FIFO from it. The
-     * adaptor passes the app-cache-dir path resolved from the dconf
-     * "tempdir" key; D-Bus itself stays argumentless (Nemo.DBus on
-     * device rejects the string-argument call with "Invalid type"). */
+     * the tailer thread that feeds the encoder FIFO from it. */
+
 int  droidrec_audio_feed(const int16_t *pcm, int samples); /* push S16LE interleaved samples */
 void droidrec_audio_end(void);     /* no more PCM; audio thread drains and exits */
 int  droidrec_audio_rate(void);    /* expected sample rate (48000) */
@@ -269,7 +267,9 @@ void stop_worker(Runner *app);
 void print_result(Runner *app);
 void cleanup(Runner *app);
 
-/* Wayland listeners (installed by the application) */
+/* Wayland listeners (installed by the application) 
+ * this should be refactored to use lipsticks compositor/lipstickrecorder.{h,cpp}
+ * */
 extern const struct lipstick_recorder_listener recorder_listener;
 extern const struct wl_output_listener output_listener;
 extern const struct wl_registry_listener registry_listener;

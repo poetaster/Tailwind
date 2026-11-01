@@ -12,22 +12,24 @@ INSTALLS += target
 QT += core dbus concurrent platformsupport-private
 
 # MDConfGroup (dconf) comes from the mlite5 package, same as the reference
-CONFIG += link_pkgconfig
-PKGCONFIG += mlite5
+CONFIG += wayland-scanner link_pkgconfig
+PKGCONFIG += wayland-client mlite5
 INCLUDEPATH += /usr/include/mlite5
+
+# Generate the Wayland client protocol bindings at build time from the XML
+# (same as lipstick/screenrecorder); avoids committing hand-generated files.
+WAYLANDCLIENTSOURCES += protocol/lipstick-recorder.xml
 
 SOURCES += \
     src/main.cpp \
     src/recorder.cpp \
     src/dbusadaptor.cpp \
-    src/droidrec.c \
-    src/wayland-lipstick-recorder-protocol.c
+    src/droidrec.c
 
 HEADERS += \
     src/recorder.h \
     src/dbusadaptor.h \
-    src/droidrec.h \
-    src/wayland-lipstick-recorder-client-protocol.h
+    src/droidrec.h
 
 LIBS += -lwayland-client -ldroidmedia -ldl -lavformat -lavcodec -lavutil -lswresample -lpthread
 
