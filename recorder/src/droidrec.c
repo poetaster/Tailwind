@@ -508,7 +508,12 @@ static DroidMediaCodec *create_encoder(Runner *runner, int *chosen_format) {
         meta.stride = runner->width;
         meta.slice_height = runner->height;
         meta.max_input_size = runner->width * runner->height * 3 / 2;
+#ifdef DROID_MEDIA_CODEC_BITRATE_CONTROL_CBR
+        /* CBR/VBR control needs droidmedia >= 00a460b (JB#57733);
+           on older droidmedia the struct has no bitrate_mode field
+           and the encoder keeps its default (usually VBR) mode. */
         meta.bitrate_mode = DROID_MEDIA_CODEC_BITRATE_CONTROL_CBR;
+#endif
         meta.codec_specific.h264.prepend_header_to_sync_frames = 1;
 
         printf("TRY_START_FORMAT %d\n", formats_to_try[i]);
