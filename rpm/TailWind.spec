@@ -7,7 +7,7 @@
 Name:       TailWind
 Summary:    Sailfish screen recorder
 Version:    0.3.3
-Release:    1
+Release:    2
 Group:      System/GUI/Other
 License:    GPLv3
 URL:        https://github.com/poetaster/Tailwind
@@ -26,6 +26,7 @@ BuildRequires:  pkgconfig(Qt5Core)
 BuildRequires:  pkgconfig(Qt5Gui)
 BuildRequires:  pkgconfig(Qt5DBus)
 BuildRequires:  pkgconfig(Qt5Concurrent)
+BuildRequires:  pkgconfig(Qt5Multimedia)
 BuildRequires:  droidmedia-devel
 BuildRequires:  ffmpeg-devel
 BuildRequires:  qt5-qtplatformsupport-devel
